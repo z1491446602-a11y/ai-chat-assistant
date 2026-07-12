@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+.codex_deps/
+.superpowers/
+dydownload-main/
+
+# Build output
+dist/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Local deployment credentials
+.deploy-certs/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local app/tool state
+.codex-logs/
+.trae/
+
+# Runtime data and generated media
+storage/
+/data.json
+public/audios/
+public/uploads/
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Workspace archives and temporary files
+workspace-artifacts/
+/chat-app-release.tgz
+
+# OS files
+.DS_Store
+Thumbs.db

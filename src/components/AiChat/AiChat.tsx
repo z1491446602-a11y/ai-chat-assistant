@@ -1,0 +1,194 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useChatStore } from '@/store';
+import { transcribeAiCallAudio, type AiTaskOwner, type ImageGenerationProvider } from '@/services/api';
+import type { MessageFile, Session } from '@/types';
+import { MessageList } from '@/components/Chat/MessageList';
+import { AiChatComposer } from './AiChatComposer';
+import { AiChatHeader } from './AiChatHeader';
+import { useAiChatSync } from './useAiChatSync';
+import { useAiChatActions } from './useAiChatActions';
+import { blobToDataUrl, createWavRecorder, type WavRecorderHandle } from '@/utils/audioCapture';
+import { compressVideoReferenceImage, validateVideoReferenceFiles } from './videoGeneration';
+
+interface AiChatProps {
+  aiOwner: AiTaskOwner;
+  refreshAiSessions: (preferredSessionId?: string | null, shouldApply?: () => boolean) => Promise<Session[]>;
+}
+
+const IMAGE_PROVIDER_OPTIONS = [
+  { value: 'gpt', label: '生成图片-GPT' },
+  { value: 'grok', label: '生成图片-Grok' },
+] as const;
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+    reader.onerror = () => reject(new Error('读取文件失败'));
+    reader.readAsDataURL(file);
+  });
+}
+function loadImage(dataUrl: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('加载图片失败'));
+    image.src = dataUrl;
+  });
+}
+async function compressImage(file: File): Promise<string> {
+  const dataUrl = await readFileAsDataUrl(file);
+  const image = await loadImage(dataUrl);
+  const scale = Math.min(1, 1600 / Math.max(image.width, image.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(image.width * scale));
+  canvas.height = Math.max(1, Math.round(image.height * scale));
+  const context = canvas.getContext('2d');
+  if (!context) return dataUrl;
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', 0.82);
+}
+const AI_DOCUMENT_EXTENSIONS = new Set(['.pdf', '.doc', '.docx', '.txt', '.md', '.csv', '.json', '.xls', '.xlsx']);
+function isAiDocumentFile(file: File) {
+  const dot = file.name.lastIndexOf('.');
+  return AI_DOCUMENT_EXTENSIONS.has(dot >= 0 ? file.name.slice(dot).toLowerCase() : '');
+}
+function detectImageGenerationMode(input: string, imageCount: number): 'generate' | 'edit' | null {
+  const text = input.trim();
+  if (!text || !/(图片生成|生成图片|生成一张|来一张图|画一张|画一个|帮我生成|绘制|文生图|图生图|海报|头像|壁纸|封面)/i.test(text)) return null;
+  return imageCount > 0 || /(参考这张图|根据这张图|用这张图|修改这张图|重绘)/i.test(text) ? 'edit' : 'generate';
+}
+
+export function AiChat({ aiOwner, refreshAiSessions }: AiChatProps) {
+  const { sessions, currentSessionId, isStreaming, patchMessage, selectSession, setStreaming, streamingMessageId, setStreamingMessageId } = useChatStore();
+  const [input, setInput] = useState('');
+  const [showVoiceRecorder, setShowVoiceRecorder] = useState(false);
+  const [isPressRecordingVoice, setIsPressRecordingVoice] = useState(false);
+  const [pressVoiceLevel, setPressVoiceLevel] = useState(0);
+  const [showMoreActions, setShowMoreActions] = useState(false);
+  const [showImageProviderMenu, setShowImageProviderMenu] = useState(false);
+  const [isImageGenerationMode, setIsImageGenerationMode] = useState(false);
+  const [selectedImageProvider, setSelectedImageProvider] = useState<ImageGenerationProvider>('gpt');
+  const [isVideoGenerationMode, setIsVideoGenerationMode] = useState(false);
+  const [pendingAiImages, setPendingAiImages] = useState<string[]>([]);
+  const [pendingAiVideoImages, setPendingAiVideoImages] = useState<string[]>([]);
+  const [pendingAiFiles, setPendingAiFiles] = useState<MessageFile[]>([]);
+  const [isUploadingImages, setIsUploadingImages] = useState(false);
+  const [isUploadingFile, setIsUploadingFile] = useState(false);
+  const aiImageInputRef = useRef<HTMLInputElement>(null);
+  const aiFileInputRef = useRef<HTMLInputElement>(null);
+  const aiVideoImageInputRef = useRef<HTMLInputElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const pressVoiceRecorderRef = useRef<WavRecorderHandle | null>(null);
+
+  const aiSessions = useMemo(() => sessions.filter(session => 'guestId' in aiOwner
+    ? session.ownerType === 'guest' && session.ownerId === aiOwner.guestId
+    : session.ownerType !== 'guest' && session.ownerId === aiOwner.userId).sort((a, b) => b.updatedAt - a.updatedAt), [aiOwner, sessions]);
+  const currentAiSession = useMemo(() => aiSessions.find(session => session.id === currentSessionId) || null, [aiSessions, currentSessionId]);
+  const currentAiMessages = currentAiSession?.messages || [];
+  const autoImageMode = useMemo(() => detectImageGenerationMode(input, pendingAiImages.length), [input, pendingAiImages.length]);
+  const effectiveImageGenerationMode = !isVideoGenerationMode && (isImageGenerationMode || autoImageMode !== null);
+  const selectedImageProviderLabel = IMAGE_PROVIDER_OPTIONS.find(option => option.value === selectedImageProvider)?.label || IMAGE_PROVIDER_OPTIONS[0].label;
+  const activeVideoMessage = [...currentAiMessages].reverse().find(message => message.role === 'assistant' && message.status === 'streaming' && message.videoGenerationStage);
+
+  const sync = useAiChatSync({ aiOwner, refreshAiSessions, currentSessionId, currentAiSession, patchMessage, setStreaming, setStreamingMessageId });
+  const isGeneratingVideoTask = Boolean(isStreaming && (activeVideoMessage || sync.currentAiTaskTypeRef.current === 'video'));
+  const actions = useAiChatActions({ aiOwner, currentSessionId, aiSessions, setStreaming, setStreamingMessageId, selectSession, startServerTaskPolling: sync.startServerTaskPolling, syncServerAiSessions: sync.syncServerAiSessions, currentAiTaskIdRef: sync.currentAiTaskIdRef, currentAiSessionIdRef: sync.currentAiSessionIdRef, currentAiTaskTypeRef: sync.currentAiTaskTypeRef, input, pendingAiImages, pendingAiFiles, pendingAiVideoImages, selectedImageProvider, effectiveImageGenerationMode, isVideoGenerationMode, setInput, setPendingAiImages, setPendingAiFiles, setPendingAiVideoImages, setShowMoreActions, setShowImageProviderMenu, setIsImageGenerationMode, setIsVideoGenerationMode });
+
+  useEffect(() => {
+    if (currentSessionId && aiSessions.some(session => session.id === currentSessionId)) return;
+    if (aiSessions[0]) selectSession(aiSessions[0].id);
+  }, [aiSessions, currentSessionId, selectSession]);
+  useEffect(() => () => { void cancelPressVoiceInput(); }, []);
+
+  async function handleSendMessage() {
+    if (isStreaming) {
+      if (!isGeneratingVideoTask) sync.handleAbortAiResponse();
+      return;
+    }
+    await actions.handleSendAiMessage();
+  }
+  async function handleAiVoiceInput(audioBlob: Blob) {
+    try {
+      const transcript = await transcribeAiCallAudio(await blobToDataUrl(audioBlob), audioBlob.type || 'audio/wav');
+      if (!transcript) throw new Error('未识别到有效语音内容');
+      setInput(current => current.trim() ? `${current.trim()} ${transcript}` : transcript);
+      setShowVoiceRecorder(false);
+      window.setTimeout(() => composerRef.current?.focus(), 0);
+    } catch (error) {
+      console.error('Failed to transcribe AI voice input', error);
+      alert(error instanceof Error ? error.message : '语音转文字失败，请稍后再试');
+    }
+  }
+  async function handleAddAiImages(files: File[]) {
+    const images = files.filter(file => file.type.startsWith('image/'));
+    if (!images.length) return;
+    setIsUploadingImages(true);
+    try {
+      const compressed = await Promise.all(images.slice(0, 3).map(compressImage));
+      setPendingAiImages(current => [...current, ...compressed].slice(0, 3));
+    }
+    catch (error) { console.error('Failed to process AI images', error); alert('图片处理失败，请换一张图片再试'); }
+    finally { setIsUploadingImages(false); setShowMoreActions(false); }
+  }
+  async function handleAddAiVideoImages(files: File[]) {
+    setIsUploadingImages(true);
+    try {
+      const compressed = await Promise.all(validateVideoReferenceFiles(files, pendingAiVideoImages.length).map(compressVideoReferenceImage));
+      setPendingAiVideoImages(current => [...current, ...compressed]);
+    }
+    catch (error) { console.error('Failed to process video reference images', error); alert(error instanceof Error ? error.message : '参考图处理失败'); }
+    finally { setIsUploadingImages(false); setShowMoreActions(false); }
+  }
+  async function handleAddAiFiles(files: File[]) {
+    const documents = files.filter(isAiDocumentFile);
+    if (!documents.length) { alert('请选择 PDF、Word、TXT、表格等文档文件'); return; }
+    setIsUploadingFile(true);
+    try {
+      const uploaded = await Promise.all(documents.slice(0, 3).map(async file => {
+        const response = await fetch('/api/upload-file', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope: 'ai', fileName: file.name, fileData: await readFileAsDataUrl(file), mimeType: file.type }) });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || '文件上传失败');
+        return { fileName: result.fileName, fileUrl: result.fileUrl, fileSize: result.fileSize, mimeType: result.mimeType } as MessageFile;
+      }));
+      setPendingAiFiles(current => [...current, ...uploaded].slice(0, 3));
+    } catch (error) { console.error('Failed to upload AI files', error); alert(error instanceof Error ? error.message : '文件上传失败'); }
+    finally { setIsUploadingFile(false); setShowMoreActions(false); }
+  }
+  async function handleDropFiles(files: File[]) {
+    if (isVideoGenerationMode) { await handleAddAiVideoImages(files); return; }
+    const images = files.filter(file => file.type.startsWith('image/'));
+    const documents = files.filter(file => !file.type.startsWith('image/') && isAiDocumentFile(file));
+    if (!images.length && !documents.length) { alert('拖拽上传支持图片、PDF、Word、TXT、表格等文档'); return; }
+    if (images.length) await handleAddAiImages(images);
+    if (documents.length) await handleAddAiFiles(documents);
+  }
+  async function handleStartPressVoiceInput() {
+    if (isPressRecordingVoice || isStreaming || isUploadingImages || isUploadingFile) return;
+    try {
+      pressVoiceRecorderRef.current = await createWavRecorder({ targetSampleRate: 16000, trimThreshold: 0.01, trimPaddingMs: 80, constraints: { sampleRate: 16000 }, onLevel: setPressVoiceLevel });
+      setIsPressRecordingVoice(true);
+    } catch (error) { console.error('Failed to start AI voice input', error); alert('无法开始录音，请检查麦克风权限'); }
+  }
+  async function cancelPressVoiceInput() {
+    const recorder = pressVoiceRecorderRef.current;
+    pressVoiceRecorderRef.current = null;
+    setIsPressRecordingVoice(false); setPressVoiceLevel(0);
+    if (recorder) { try { await recorder.cancel(); } catch (error) { console.error('Failed to cancel AI voice input', error); } }
+  }
+  async function handleStopPressVoiceInput() {
+    const recorder = pressVoiceRecorderRef.current;
+    if (!recorder) return;
+    pressVoiceRecorderRef.current = null; setIsPressRecordingVoice(false); setPressVoiceLevel(0);
+    try { const result = await recorder.stop(); if (result?.blob?.size) await handleAiVoiceInput(result.blob); }
+    catch (error) { console.error('Failed to stop AI voice input', error); alert('语音识别失败，请重新再试一次'); }
+  }
+
+  const canSend = isVideoGenerationMode ? Boolean(input.trim()) : Boolean(input.trim() || pendingAiImages.length || pendingAiFiles.length);
+  const sendButtonDisabled = isStreaming ? isGeneratingVideoTask : (!canSend || isUploadingImages || isUploadingFile);
+  return <div className="flex h-full min-w-0 flex-col bg-[linear-gradient(180deg,rgba(248,252,255,0.92)_0%,rgba(238,246,255,0.86)_100%)]">
+    <AiChatHeader />
+    <div className="min-h-0 flex-1"><MessageList messages={currentAiMessages} isStreaming={isStreaming} streamingMessageId={streamingMessageId} onSuggestionClick={suggestion => void actions.handleQuickSuggestion(suggestion)} /></div>
+    <AiChatComposer isStreaming={isStreaming} loading={false} isUploadingImages={isUploadingImages} isUploadingFile={isUploadingFile} sendButtonDisabled={sendButtonDisabled} input={input} placeholder={isVideoGenerationMode ? '描述你想生成的视频...' : effectiveImageGenerationMode ? '描述你想生成或编辑的图片...' : '给 AI 日常聊天助手发送消息...'} showVoiceRecorder={showVoiceRecorder} isPressRecordingVoice={isPressRecordingVoice} pressVoiceLevel={pressVoiceLevel} showMoreActions={showMoreActions} showImageProviderMenu={showImageProviderMenu} selectedImageProviderLabel={selectedImageProviderLabel} effectiveImageGenerationMode={effectiveImageGenerationMode} isVideoGenerationMode={isVideoGenerationMode} isGeneratingVideoTask={isGeneratingVideoTask} pendingAiImages={pendingAiImages} pendingAiFiles={pendingAiFiles} pendingAiVideoImages={pendingAiVideoImages} imageProviderOptions={IMAGE_PROVIDER_OPTIONS} composerRef={composerRef} aiImageInputRef={aiImageInputRef} aiFileInputRef={aiFileInputRef} aiVideoImageInputRef={aiVideoImageInputRef} onInputChange={setInput} onSendMessage={() => void handleSendMessage()} onToggleImageProviderMenu={() => { setShowMoreActions(false); setShowImageProviderMenu(value => !value); }} onSelectImageProvider={provider => { setSelectedImageProvider(provider); setIsImageGenerationMode(true); setIsVideoGenerationMode(false); setShowImageProviderMenu(false); }} onToggleImageGenerationMode={() => { setIsImageGenerationMode(value => !value); setIsVideoGenerationMode(false); setPendingAiVideoImages([]); }} onToggleVideoGenerationMode={() => { if (!isStreaming) { setIsVideoGenerationMode(value => !value); setIsImageGenerationMode(false); setPendingAiImages([]); setPendingAiFiles([]); } }} onRemovePendingAiImage={index => setPendingAiImages(images => images.filter((_, i) => i !== index))} onRemovePendingAiFile={index => setPendingAiFiles(files => files.filter((_, i) => i !== index))} onRemovePendingAiVideoImage={index => setPendingAiVideoImages(images => images.filter((_, i) => i !== index))} onPickAiImages={event => { const files = Array.from(event.target.files || []); event.target.value = ''; void handleAddAiImages(files); }} onPickAiFiles={event => { const files = Array.from(event.target.files || []); event.target.value = ''; void handleAddAiFiles(files); }} onPickAiVideoImages={event => { const files = Array.from(event.target.files || []); event.target.value = ''; void handleAddAiVideoImages(files); }} onDropFiles={files => void handleDropFiles(files)} onCancelVoiceRecorder={() => void cancelPressVoiceInput().then(() => setShowVoiceRecorder(false))} onStartPressVoiceInput={handleStartPressVoiceInput} onStopPressVoiceInput={() => void handleStopPressVoiceInput()} onOpenMoreActions={() => { setShowImageProviderMenu(false); setShowMoreActions(value => !value); }} onOpenAiImagePicker={() => aiImageInputRef.current?.click()} onOpenAiFilePicker={() => aiFileInputRef.current?.click()} onOpenAiVideoImagePicker={() => aiVideoImageInputRef.current?.click()} onOpenVoiceRecorder={() => { void cancelPressVoiceInput(); setShowVoiceRecorder(true); }} />
+  </div>;
+}

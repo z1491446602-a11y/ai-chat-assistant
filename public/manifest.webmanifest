@@ -1,0 +1,22 @@
+{
+  "name": "人工智障",
+  "short_name": "人工智障",
+  "description": "人工智障",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#fff7fb",
+  "theme_color": "#f472b6",
+  "icons": [
+    {
+      "src": "/avatar.jpg",
+      "sizes": "192x192",
+      "type": "image/jpeg"
+    },
+    {
+      "src": "/avatar.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg"
+    }
+  ]
+}
