@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 
-import { render, screen, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Message } from '@/types';
 import { ImageMessage } from './ImageMessage';
+
+afterEach(() => cleanup());
 
 describe('ImageMessage', () => {
   it('renders real stage progress, elapsed time, and the leave-page hint', () => {
@@ -69,7 +71,7 @@ describe('ImageMessage', () => {
     render(<ImageMessage message={message} />);
 
     const gallery = screen.getByRole('region', { name: '可横向滑动浏览 3 张生成图片' });
-    const previews = within(gallery).getAllByRole('link', { name: /查看原图/ });
+    const previews = within(gallery).getAllByRole('button', { name: /放大查看图片/ });
 
     expect(gallery.className).toContain('overflow-x-auto');
     expect(gallery.className).toContain('snap-x');
@@ -78,6 +80,47 @@ describe('ImageMessage', () => {
     expect(previews[0].className).toContain('snap-start');
     expect(previews[0].style.aspectRatio).toBe('1024 / 1536');
     expect(within(previews[0]).getByRole('img').className).toContain('object-contain');
+  });
+
+  it('opens an in-page enlarged preview instead of navigating to the image URL', () => {
+    const message = createMessage({
+      images: ['/uploads/one.png', '/uploads/two.png'],
+      status: 'sent',
+    });
+
+    render(<ImageMessage message={message} />);
+    fireEvent.click(screen.getByRole('button', { name: '放大查看图片 1' }));
+
+    const dialog = screen.getByRole('dialog', { name: '图片大图预览' });
+    expect(within(dialog).getByRole('img', { name: '放大预览图片 1' }).getAttribute('src')).toBe('/uploads/one.png');
+    expect(screen.getByRole('link', { name: '下载图片' }).getAttribute('href')).toBe('/uploads/one.png');
+
+    fireEvent.keyDown(document, { key: 'ArrowRight' });
+    expect(within(dialog).getByRole('img', { name: '放大预览图片 2' }).getAttribute('src')).toBe('/uploads/two.png');
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: '图片大图预览' })).toBeNull();
+  });
+
+  it('provides a visible desktop control that scrolls the multi-image track', () => {
+    const scrollBy = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollBy', {
+      configurable: true,
+      value: scrollBy,
+    });
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+      configurable: true,
+      get: () => 600,
+    });
+    const message = createMessage({
+      images: ['/uploads/one.png', '/uploads/two.png', '/uploads/three.png'],
+      status: 'sent',
+    });
+
+    render(<ImageMessage message={message} />);
+    fireEvent.click(screen.getByRole('button', { name: '向右浏览图片' }));
+
+    expect(scrollBy).toHaveBeenCalledWith({ left: 492, behavior: 'smooth' });
   });
 });
 
