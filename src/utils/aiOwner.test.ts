@@ -24,14 +24,17 @@ describe('getAiOwner', () => {
     vi.unstubAllGlobals();
   });
 
-  it('returns a normalized persisted user owner before considering legacy state', () => {
+  it('migrates only a dedicated persisted user owner into the same guest identity', () => {
     window.localStorage.setItem(AI_OWNER_KEY, JSON.stringify({ userId: '  user-42  ' }));
     window.localStorage.setItem(
       LEGACY_SOCIAL_KEY,
       JSON.stringify({ state: { currentUser: { id: 'legacy-user' } } }),
     );
 
-    expect(getAiOwner()).toEqual({ userId: 'user-42' });
+    expect(getAiOwner()).toEqual({ guestId: 'user-42' });
+    expect(window.localStorage.getItem(AI_OWNER_KEY)).toBe(
+      JSON.stringify({ guestId: 'user-42' }),
+    );
     expect(mocks.getGuestAiId).not.toHaveBeenCalled();
   });
 
@@ -42,13 +45,13 @@ describe('getAiOwner', () => {
     expect(mocks.getGuestAiId).not.toHaveBeenCalled();
   });
 
-  it('strips unrelated persisted fields from the returned owner', () => {
+  it('replaces legacy user-shaped owner data with a guest owner', () => {
     window.localStorage.setItem(
       AI_OWNER_KEY,
       JSON.stringify({ userId: 'user-42', nickname: 'Do not retain', friends: ['friend-1'] }),
     );
 
-    expect(getAiOwner()).toEqual({ userId: 'user-42' });
+    expect(getAiOwner()).toEqual({ guestId: 'guest-stable' });
   });
 
   it.each([
@@ -65,7 +68,7 @@ describe('getAiOwner', () => {
     );
   });
 
-  it('migrates a valid legacy user when the dedicated owner is invalid', () => {
+  it('ignores a legacy social user when the dedicated owner is invalid', () => {
     window.localStorage.setItem(
       AI_OWNER_KEY,
       JSON.stringify({ userId: 'invalid-user', guestId: 'invalid-guest' }),
@@ -75,13 +78,13 @@ describe('getAiOwner', () => {
       JSON.stringify({ state: { currentUser: { id: 'legacy-user' } } }),
     );
 
-    expect(getAiOwner()).toEqual({ userId: 'legacy-user' });
+    expect(getAiOwner()).toEqual({ guestId: 'guest-stable' });
     expect(window.localStorage.getItem(AI_OWNER_KEY)).toBe(
-      JSON.stringify({ userId: 'legacy-user' }),
+      JSON.stringify({ guestId: 'guest-stable' }),
     );
   });
 
-  it('migrates only the legacy current user id into the dedicated owner key', () => {
+  it('does not migrate removed social-account state into the AI owner', () => {
     window.localStorage.setItem(
       LEGACY_SOCIAL_KEY,
       JSON.stringify({
@@ -96,11 +99,11 @@ describe('getAiOwner', () => {
       }),
     );
 
-    expect(getAiOwner()).toEqual({ userId: 'deployed-user' });
+    expect(getAiOwner()).toEqual({ guestId: 'guest-stable' });
     expect(window.localStorage.getItem(AI_OWNER_KEY)).toBe(
-      JSON.stringify({ userId: 'deployed-user' }),
+      JSON.stringify({ guestId: 'guest-stable' }),
     );
-    expect(mocks.getGuestAiId).not.toHaveBeenCalled();
+    expect(mocks.getGuestAiId).toHaveBeenCalledTimes(1);
   });
 
   it('persists a stable guest owner when there is no legacy user', () => {

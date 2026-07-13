@@ -2,8 +2,8 @@ import type { AiTaskOwner } from '@/services/aiTasksApi';
 import { getGuestAiId } from './guestAi';
 
 const AI_OWNER_STORAGE_KEY = 'ai-owner-v1';
-const LEGACY_SOCIAL_STORAGE_KEY = 'social-store-v4';
 const SERVER_GUEST_ID = 'guest_server';
+const LEGACY_GUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,80}$/u;
 let browserFallbackGuestId: string | null = null;
 
 function normalizeOwner(value: unknown): AiTaskOwner | null {
@@ -15,13 +15,8 @@ function normalizeOwner(value: unknown): AiTaskOwner | null {
   const hasUserId = Object.prototype.hasOwnProperty.call(candidate, 'userId');
   const hasGuestId = Object.prototype.hasOwnProperty.call(candidate, 'guestId');
 
-  if (hasUserId === hasGuestId) {
+  if (hasUserId || !hasGuestId) {
     return null;
-  }
-
-  if (hasUserId && typeof candidate.userId === 'string') {
-    const userId = candidate.userId.trim();
-    return userId ? { userId } : null;
   }
 
   if (hasGuestId && typeof candidate.guestId === 'string') {
@@ -30,6 +25,21 @@ function normalizeOwner(value: unknown): AiTaskOwner | null {
   }
 
   return null;
+}
+
+function normalizeLegacyUserOwner(value: unknown): AiTaskOwner | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  const keys = Object.keys(candidate);
+  if (keys.length !== 1 || keys[0] !== 'userId' || typeof candidate.userId !== 'string') {
+    return null;
+  }
+
+  const guestId = candidate.userId.trim();
+  return LEGACY_GUEST_ID_PATTERN.test(guestId) ? { guestId } : null;
 }
 
 function readStorage(key: string): string | null {
@@ -58,26 +68,6 @@ function persistOwner(owner: AiTaskOwner) {
   } catch {
     // Storage may be unavailable in privacy modes; the in-memory caller can still proceed.
   }
-}
-
-function readLegacyUserId(): string | null {
-  const legacyState = parseJson(readStorage(LEGACY_SOCIAL_STORAGE_KEY));
-  if (!legacyState || typeof legacyState !== 'object') {
-    return null;
-  }
-
-  const state = (legacyState as Record<string, unknown>).state;
-  if (!state || typeof state !== 'object') {
-    return null;
-  }
-
-  const currentUser = (state as Record<string, unknown>).currentUser;
-  if (!currentUser || typeof currentUser !== 'object') {
-    return null;
-  }
-
-  const id = (currentUser as Record<string, unknown>).id;
-  return typeof id === 'string' && id.trim() ? id.trim() : null;
 }
 
 function getBrowserFallbackGuestId() {
@@ -116,16 +106,16 @@ export function getAiOwner(): AiTaskOwner {
     return { guestId: getSafeGuestId(false) };
   }
 
-  const persistedOwner = normalizeOwner(parseJson(readStorage(AI_OWNER_STORAGE_KEY)));
+  const persistedValue = parseJson(readStorage(AI_OWNER_STORAGE_KEY));
+  const persistedOwner = normalizeOwner(persistedValue);
   if (persistedOwner) {
     return persistedOwner;
   }
 
-  const legacyUserId = readLegacyUserId();
-  if (legacyUserId) {
-    const owner: AiTaskOwner = { userId: legacyUserId };
-    persistOwner(owner);
-    return owner;
+  const migratedOwner = normalizeLegacyUserOwner(persistedValue);
+  if (migratedOwner) {
+    persistOwner(migratedOwner);
+    return migratedOwner;
   }
 
   const owner: AiTaskOwner = { guestId: getSafeGuestId(true) };

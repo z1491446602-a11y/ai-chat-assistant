@@ -146,7 +146,7 @@ const MessageBubbleComponent = ({
               />
             </div>
           </div>
-          <div className="w-full max-w-3xl">
+          <div className="min-w-0 flex-1 max-w-3xl">
             {hasAssistantVideo ? (
               <div className="mb-3 w-full max-w-2xl">
                 <VideoMessage message={message} />

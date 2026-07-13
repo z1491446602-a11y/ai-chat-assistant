@@ -54,6 +54,57 @@ describe('toPersistedChatState', () => {
     expect(persisted.sessions[0].messages[1].content).toBe('Final response');
     expect(persisted.sessions[0]).not.toHaveProperty('pendingTaskId');
   });
+
+  it('bounds cached history and removes embedded media payloads', () => {
+    const sessions = Array.from({ length: 25 }, (_, sessionIndex) => createSession({
+      id: `session-${sessionIndex}`,
+      messages: Array.from({ length: 60 }, (_, messageIndex) => ({
+        id: `message-${sessionIndex}-${messageIndex}`,
+        role: 'assistant' as const,
+        content: 'cached',
+        timestamp: messageIndex,
+        status: 'sent' as const,
+        images: [
+          'data:image/png;base64,large-payload',
+          '/uploads/generated.png',
+        ],
+        audioUrl: 'data:audio/wav;base64,large-audio',
+        videoUrl: 'data:video/mp4;base64,large-video',
+        files: [
+          { fileName: 'embedded.txt', fileUrl: 'data:text/plain;base64,large-file' },
+          { fileName: 'server.txt', fileUrl: '/uploads/server.txt' },
+        ],
+      })),
+    }));
+
+    const persisted = toPersistedChatState({ sessions, currentSessionId: 'session-0' });
+
+    expect(persisted.sessions).toHaveLength(20);
+    expect(persisted.sessions[0].messages).toHaveLength(50);
+    expect(persisted.sessions[0].messages[0].id).toBe('message-0-10');
+    expect(persisted.sessions[0].messages[0].images).toEqual(['/uploads/generated.png']);
+    expect(persisted.sessions[0].messages[0].audioUrl).toBeUndefined();
+    expect(persisted.sessions[0].messages[0].videoUrl).toBeUndefined();
+    expect(persisted.sessions[0].messages[0].files).toEqual([
+      { fileName: 'server.txt', fileUrl: '/uploads/server.txt' },
+    ]);
+  });
+
+  it('retains the selected session when it falls outside the bounded history window', () => {
+    const sessions = Array.from({ length: 25 }, (_, index) => createSession({
+      id: `session-${index}`,
+      updatedAt: 100 - index,
+    }));
+
+    const persisted = toPersistedChatState({
+      sessions,
+      currentSessionId: 'session-24',
+    });
+
+    expect(persisted.sessions).toHaveLength(20);
+    expect(persisted.sessions.map(session => session.id)).toContain('session-24');
+    expect(persisted.currentSessionId).toBe('session-24');
+  });
 });
 
 describe('createDeduplicatingStateStorage', () => {
@@ -77,6 +128,19 @@ describe('createDeduplicatingStateStorage', () => {
       ['chat', '{"version":2}'],
       ['chat', '{"version":2}'],
     ]);
+    expect(removeItem).toHaveBeenCalledWith('chat');
+  });
+
+  it('drops an overflowing local cache without breaking chat state updates', () => {
+    const quotaError = new DOMException('Storage full', 'QuotaExceededError');
+    const removeItem = vi.fn();
+    const storage = createDeduplicatingStateStorage({
+      getItem: vi.fn(() => null),
+      setItem: vi.fn(() => { throw quotaError; }),
+      removeItem,
+    });
+
+    expect(() => storage.setItem('chat', 'large-value')).not.toThrow();
     expect(removeItem).toHaveBeenCalledWith('chat');
   });
 });

@@ -1,235 +1,164 @@
 # 项目审计报告
 
-审计日期：2026-07-12。工作目录：`C:\Users\kaikai\Desktop\Project\聊天ai备份`。
+审计日期：2026-07-13。主工作区：`C:\Users\kaikai\Desktop\Project\聊天ai备份`。
 
-本报告基于当前一方源码、测试结果、生产构建和目录元数据。没有读取真实 `.env*`、证书、`storage/` 内容、根遗留 `data.json`、媒体、用户数据或归档内容；大型目录仅统计文件数与未压缩字节，不输出媒体文件名。报告不包含真实账号、密码、令牌、IP 或密钥。
+本报告只记录源码、构建产物元数据、测试结果和生产运行元数据。生产 `.env`、用户消息、手机号、姓名、密码、API Key、仓库令牌和媒体内容均不写入报告。
 
-## 1. 结论
+## 1. 结论与改造选择
 
-本轮采用有边界的渐进式重构，并在用户缩减产品范围后完成 AI-only 清理。公开 AI 接口路径、任务响应结构和 AI 助手行为保持兼容；好友聊天、登录、私聊、贴纸、好友视频通话、智慧黄科/Hhstu、Socket.IO 与无关下载子项目不再进入主运行树和发布包。
+本轮继续采用有边界的渐进式重构，而不是重写整个应用。原因是现有 React/Vite + Express 单进程骨架、AI provider 和线上 Nginx/systemd 链路仍可用，直接重写会扩大 API 路径、历史数据和流式交互的回归面。改造集中在已经阻碍安全性和维护性的边界：可信身份、积分事务、媒体幂等、任务调度、持久化恢复、错误公开策略和前端账户状态。
 
-当前产品职责为：AI 对话与会话管理、图片生成、视频生成、语音、文件上下文和 Markdown 展示。智慧黄科已独立放在 `C:\Users\kaikai\Desktop\Project\智慧黄科模块`，本报告不读取或展开该目录。
+主项目现在是纯 AI 助手，只保留普通聊天、AI 会话历史、图片生成、视频生成、语音消息、文件附件和 Markdown 展示。好友聊天、私聊、贴纸、好友/AI 通话、Socket.IO、智慧黄科/Hhstu 和旧 APK 材料不再属于运行树或发布包。智慧黄科与旧 APK 材料分别保存在主项目外的独立归档目录。
 
-代码、测试、lint 和生产构建已在本地通过；没有服务器地址，因此没有连接或部署到阿里云。文档中的部署状态不能替代线上验证。
+新账户系统没有改变游客普通聊天入口。图片和视频必须登录；成功任务按 GPT 图片 0.2、Grok 图片 0.1、视频 1.5 积分计费，失败、取消、排队拒绝和不可恢复任务释放预留。
 
-## 2. 统计口径与目录元数据
+## 2. 当前职责边界
 
-统计使用文件系统只读元数据递归汇总，目录本身不计数，字节为文件未压缩长度。根目录一方文件包含 `.env.example`，排除其他 `.env*`、根 `data.json`、压缩发布包和归档；`public/`、`dist/`、`storage/` 与 `node_modules/` 只汇总，不读取内容或列文件名。`workspace-artifacts/` 是主任务仍可能写入的本地验收/归档目录，明确排除在稳定统计外，且未读取内容。
-
-| 路径/类别 | 文件数 | 字节 | 说明 |
-| --- | ---: | ---: | --- |
-| 根目录一方文件 | 18 | 337,346 | 源码入口、锁文件、配置与根文档 |
-| `src/` | 48 | 239,463 | 前端源码与同目录测试 |
-| `server/` | 19 | 156,643 | AI、媒体、存储与静态交付模块 |
-| `tests/` | 18 | 67,343 | 构建、服务端、可达性、UTF-8 与 smoke 测试 |
-| `scripts/` | 4 | 15,555 | 构建输出验证及浏览器/图片/视频 smoke |
-| `deploy/` | 4 | 3,421 | systemd、Nginx 与部署文档；APK 材料已移出主项目 |
-| `docs/` | 5 | 148,920 | 审计、计划与设计文档 |
-| `public/` | 42 | 10,831,245 | 静态源与历史媒体，仅元数据 |
-| `dist/` | 124 | 6,071,875 | 最新 Vite 构建，仅元数据/关键资源尺寸 |
-| `storage/` | 16 | 29,327,637 | 运行时数据，仅元数据，禁止发布覆盖 |
-| `node_modules/` | 24,989 | 387,343,807 | 当前本地完整开发依赖，仅元数据，不审查逐文件内容 |
-
-主项目根目录已不存在 `hhstu/`、`dydownload-main/`、`Social/` 等旧功能目录。外部 `Project` 下的其他项目不是本应用构建输入。
-
-## 3. 当前核心树与职责
-
-完整核心文件树见 [`PROJECT_STRUCTURE.md`](../PROJECT_STRUCTURE.md)。当前职责边界如下：
+完整核心树见 [`PROJECT_STRUCTURE.md`](../PROJECT_STRUCTURE.md)。关键模块如下：
 
 | 模块 | 职责 |
 | --- | --- |
-| `src/App.tsx` | owner 初始化、会话选择/同步、页面可见性与同步代次协调 |
-| `src/components/AiChat/` | AI 对话编排、紧凑居中标题、输入附件、任务动作/轮询、语音消息与视频生成 |
-| `src/components/Chat/` | 消息列表、纯文本流式边界、Markdown/图片/视频渲染 |
-| `src/components/Shared/` | 内容错误边界和通用附件卡片 |
-| `src/services/` | AI HTTP 合约、请求重试/解析；`api.ts` 仅作兼容重导出 |
-| `src/store/` | 聊天、设置与去重持久化；不再含社交状态 |
-| `server.js` | Express、中间件、模块装配、静态路由与启动 |
-| `server/aiRoutes.js` | AI 会话、任务、语音/图片/视频 HTTP 路由 |
-| `server/aiTasks.js` | 任务状态、执行、取消与恢复编排 |
-| `server/aiProviders.js` | 聊天、搜索、语音、图片上游适配 |
-| `server/aiSessions.js` | owner 范围内会话与消息持久化 |
-| `server/staticDelivery.js` | `/assets`、媒体路由、缓存、404 和 SPA fallback |
-| `tests/build/` | `public` 白名单与禁止媒体进入 `dist` 的构建回归 |
-| `tests/server/` | AI-only 表面、会话、媒体、静态交付和 provider 回归 |
+| `src/App.tsx` | 认证状态、账户代次、owner 切换、云端历史和侧栏协调 |
+| `src/components/Auth/` | 登录、注册、余额、兑换码和管理员辅助重置 |
+| `src/components/AiChat/` | 普通聊天、媒体任务、附件、轮询、取消和余额校准 |
+| `src/services/` | 同源 HTTP 合约、稳定 requestId、中文网络错误和安全重试 |
+| `src/store/chatPersistence.ts` | 有界浏览器缓存，不保存流式中间态或内嵌 Base64 媒体 |
+| `server/authService.js` | scrypt 密码、哈希会话、管理员引导和密码重置 |
+| `server/authRoutes.js` | HttpOnly Cookie、认证、积分和管理员 API |
+| `server/pointsService.js` | 整数积分、预留、结算、兑换码和审计流水 |
+| `server/mediaRequestService.js` | 付费媒体 requestId 的持久 claim、重放、租约和恢复 |
+| `server/aiRoutes.js` | HTTP 路由、可信 owner、准入、限流和兼容入口 |
+| `server/aiTasks.js` | 聊天/媒体调度、执行、取消、恢复和终态清理 |
+| `server/aiSessions.js` | owner 范围内的有界会话和消息持久化 |
+| `server/storage.js` | 原子 JSON、备份恢复、受控迁移和私有文件权限 |
+| `server/corsPolicy.js` / `server/httpErrors.js` | 同源 CORS、开发白名单和统一终端错误 |
 
-已从主项目移除：`src/components/Social/`、`socialStore`、`realtime`、社交类型、Hhstu API/桥接/Python 入口、Socket.IO 服务/代理/Nginx 遗留、AI 通话入口/面板/hook，以及 `dydownload` 发布说明。旧 APK 材料已迁移到 `C:\Users\kaikai\Desktop\Project\聊天ai旧APK材料`，不再属于构建或发布输入。源码可达性与 AI-only 表面测试防止这些模块回流。
+仍然较长的 `server/aiProviders.js`、`server/aiRoutes.js` 和 `server/aiTasks.js` 是下一轮可拆分对象。本轮没有为了行数指标强拆 provider/路由，因为认证、计费和恢复正在跨这些路径收口；在行为测试稳定后再按 chat/image/video 子域拆分更安全。
 
-顶部标题已移除头像并压缩高度；标题位于对称的左右控制轨道之间，因此在窄屏与桌面均相对聊天区域居中，不会因单侧按钮数量发生偏移。
-
-## 4. 请求与数据链路
+## 3. 请求与数据地图
 
 ```text
-App owner/session coordinator
-  -> 解析严格 XOR owner（user 或 guest）并选择 session
-  -> AiChat / useAiChatActions
-  -> POST /api/ai-task/chat|voice|image（视频走对应 AI 路由）
-  -> server/aiRoutes
-  -> server/aiTasks
-  -> server/aiProviders / imageProvider / videoProvider
-  -> 配置的上游模型 API
-  -> aiSessions / storage 保存任务关联消息
-  -> GET /api/ai-task/:taskId 轮询
-  -> useAiChatSync 的 taskId/请求代次相关性检查
-  -> chatStore 与服务端会话同步
-  -> MessageList / MessageBubble
-  -> 流式阶段纯文本；完成后按需 Markdown / KaTeX / Mermaid
+页面启动
+  -> GET /api/auth/me
+  -> authenticated | guest | error
+  -> 选择 account owner 或本地 guest owner
+
+普通聊天
+  -> POST /api/ai-task/chat
+  -> Cookie 身份或 guestId -> 访客限流 -> chat scheduler
+  -> provider 流式响应 -> aiSessions
+  -> GET /api/ai-task/:taskId
+  -> useAiChatSync -> Zustand -> 消息渲染
+
+图片 / 视频
+  -> Cookie 身份校验，游客返回 401
+  -> userId + mediaType + requestId 持久 claim
+  -> 相同 payload 重放；不同 payload 返回 409
+  -> pointsService 预留整数积分
+  -> media scheduler 排队并调用 provider
+  -> 结果和终态持久化
+  -> 成功扣费；失败/取消/拒绝释放
+  -> 前端立即及延迟刷新余额
+
+账户与积分
+  -> /api/auth/register|login|logout|me
+  -> /api/points/redeem
+  -> /api/admin/redeem-codes
+  -> /api/admin/users/reset-password
 ```
 
-前端 owner 类型使用严格 XOR：空 owner 或同时提供 user/guest 会在请求前失败。轮询对终态、taskId 代次、迟到成功/失败/取消均有保护；`App` 后台同步在流式或页面隐藏时暂停，并以请求代次阻止旧响应覆盖新会话。
+请求体中的 `userId` 不能覆盖 Cookie 身份。未登录请求没有账号 owner 权限；其他账号查询任务返回 404，避免泄露对象是否存在。
 
-## 5. 网页加载性能
+## 4. 认证、积分与幂等
 
-本次数据来自最新 `dist/index.html` 引用关系、文件原始字节和 Node `gzipSync`。首屏关键资源定义为入口 JS、两个 module preload、主 CSS 和懒加载后立即进入 AI 页面所需的 `AiChat` chunk；不含只有消息完成并出现富文本后才加载的 Markdown/KaTeX/Mermaid。
+- 注册要求 11 位手机号、8 至 72 个字符的密码和合法真实姓名。
+- 密码使用随机盐 `scrypt`；进程级最多并行 4 次 scrypt，未知手机号也执行 dummy scrypt，降低账号枚举时序差异。
+- 登录 token 只在 Cookie 中公开，服务器只存 SHA-256 哈希；Cookie 为 HttpOnly、SameSite=Lax，生产使用 Secure。
+- 每个账号最多保留 10 个有效登录会话。
+- 管理员可生成强制含大写、小写和数字的 8 位兑换码；磁盘只保存 HMAC，不保存明文码。
+- 积分使用整数单位，`1 unit = 0.1 积分`。预留和结算均为幂等事务并保留有界审计记录。
+- 管理员辅助重置会核对手机号和真实姓名，更新密码并撤销该账号全部会话。没有短信验证前不提供公开自助找回。
+- 付费媒体幂等键为“账号 + image/video + requestId”。未接受 claim 使用 2 分钟租约，终态至少保留 24 小时，注册表损坏会拒绝启动而不是静默清空。
+- 旧调用省略 requestId 时生成一次兼容 ID；显式复用 ID 才提供跨独立请求的可靠重放。claimed 崩溃恢复会清理对应 pending、释放积分并中止 claim。
+- 主数据和备份在 `saveData` 成功返回时保存同一安全状态，避免损坏恢复复活已注销会话或旧密码；财务容器字段异常会拒绝启动。
 
-| 资源 | raw | gzip |
-| --- | ---: | ---: |
-| 主入口 `index-*.js` | 28,894 B（构建摘要 28.14 kB） | 10.03 kB |
-| 首屏 preload：`ui` + `vendor` | 153,679 B | 49.43 kB |
-| 主 CSS | 42,945 B（构建摘要 42.95 kB） | 8.33 kB |
-| `AiChat` chunk | 49,322 B（构建摘要 47.85 kB） | 15.29 kB |
-| **首屏关键资源合计** | **274,840 B** | **83.08 kB** |
+## 5. 历史、缓存与容量
 
-相较最初审计的 AI 路由关键资源 `2,357,477 B / 678,056 B gzip`，当前同类关键集合 raw 下降约 88.3%，gzip 下降约 87.7%。好友聊天与 AI 通话均已删除，因此不再沿用旧 `FriendChat` 或通话 chunk 指标。
+浏览器最多保存 20 个会话、每会话 50 条稳定消息；服务器每个 owner 最多 100 个会话、每会话 200 条消息。两端都移除流式中间态和 `data:` Base64 媒体，因此用户不需要把“频繁清缓存”作为正常操作。账号历史以服务器为权威来源，登录同一账号可跨设备查看。
 
-富文本按需资源不阻塞空会话首屏：
+升级前专用 `ai-owner-v1` 的旧 `{userId}` 会降级为 guest 身份；服务端只在 ID 不属于真实 `authUsers` 时原子迁移旧 raw 历史桶。旧社交 store 不作为身份来源。
 
-| 按需资源 | raw | gzip |
-| --- | ---: | ---: |
-| `MarkdownContent` JS | 297,194 B | 91,793 B |
-| `MarkdownContent` CSS | 29,232 B | 8,039 B |
-| Markdown vendor | 1,004,883 B | 322,751 B |
-| KaTeX | 261,395 B | 77,591 B |
-| Mermaid core | 603,041 B | 141,251 B |
+生产升级前的主数据约 16.7 MB，其中约 16.4 MB 是 225 个 AI owner 的历史；旧好友、公告和旧账号键合计约 156 KB。部署会先做独立备份，再由受控迁移删除旧键并保留 AI 历史。数据文件、备份和目录权限分别收紧为 0600、0600 和 0700。
 
-已处理的加载瓶颈包括：移除背景启动等待、Google Fonts 非阻塞加载、Markdown/KaTeX/Mermaid 动态导入、流式阶段不加载 Markdown chunk、localStorage 去重、Express compression、静态缓存分层、SSE/媒体压缩过滤和 Nginx buffering 策略。
+默认调度边界：
 
-## 6. 代码清理与编码
+| 工作类型 | 全局并发 | 全局队列 | owner 边界 |
+| --- | ---: | ---: | --- |
+| 普通聊天及兼容文本/语音入口 | 8 | 32 | 同 owner 并发 1、排队 4 |
+| 图片/视频合计 | 4 | 24 | 每 owner 排队 2 |
+| 图片 | 3 | 共享 | 受总媒体上限约束 |
+| 视频 | 1 | 共享 | 受总媒体上限约束 |
 
-- 修复 37 处真实 mojibake/replacement/private-use 文本问题，并以 `.editorconfig` 固定 UTF-8/LF。
-- `tests/sourceTextQuality.test.js` 扫描一方运行时文本，当前严格回归为 0 个问题。
-- 删除原先 15 个不可达模块，随后按产品决策继续删除整个社交/Hhstu 运行面。
-- `src/services/api.ts` 从 1,107 行巨石缩为兼容 barrel；HTTP 与 AI 合约分别由 `http.ts`、`aiTasksApi.ts` 负责。
-- 生产 `dependencies` 只保留 Express/中间件、HTTP 客户端和服务端文件解析包；React、Zustand、Markdown/KaTeX/Mermaid、DOMPurify、图标与样式辅助库迁入 `devDependencies`，因为它们只参与 Vite 构建。未引用的 `pptxgenjs` 已删除，测试直接依赖的 `@testing-library/dom` 已显式声明。
-- 锁文件中的直接/间接运行版本没有改变。远端 `npm ci --omit=dev` 实测使 release 总占用约从 350 MB 降至 152 MB，`node_modules` 约从 343 MB 降至 145 MB；数值会随平台与文件系统计量略有变化。
-- 音频默认写入 `storage/audios`，`public/audios` 只作历史只读回退；Vite 只复制安全 public 白名单，构建验证拒绝 `dist/audios`、`dist/uploads` 和 `dist/videos`。
-- 旧 Socket proxy、Nginx 和 fallback 遗留已清理；静态媒体路由优先于 `dist` 并明确返回资源 404。当前 SPA navigation fallback 只接受无扩展名的 HTML 导航，合法 `%25` 及嵌套百分号路径不会再被误判为 404。
-- 上传目录默认总配额为 1 GiB、最多 5,000 个文件；同一客户端默认 10 分钟最多 30 次上传。四项 `.env` 参数必须为严格正十进制安全整数，无效时服务启动失败。目录 usage 默认缓存 60 秒，成功写入后增量更新，疑似超限时强制重扫，避免每请求 O(n) 扫描与小文件/inode 耗尽。validation 保持 400、quota 为 413、非预期文件系统错误为通用 500；客户端键只在直连对端为 loopback 代理时接受 `X-Forwarded-For` 覆盖。
-- AI-only 新安装的空数据结构只包含 `aiSessions` 与 `videoJobs`。兼容读取旧数据时仍原样保留未知字段，避免在没有受控迁移和备份时破坏历史数据。
+访客 AI 操作默认每 IP 每 60 秒最多 20 次，限流键上限 10,000；访客 owner 桶上限 500。
 
-## 7. 超长文件
+## 6. 加载与运行性能
 
-口径：当前一方代码的物理行数，包含空行和注释；统计 `.js/.mjs/.ts/.tsx/.css`，包含测试，阈值为严格大于 300 行。
+已经完成的主要优化包括：
 
-| 文件 | 行数 |
-| --- | ---: |
-| `server/aiProviders.js` | 1,440 |
-| `server/aiRoutes.js` | 750 |
-| `src/styles/globals.css` | 598 |
-| `server/aiTasks.js` | 485 |
-| `src/App.tsx` | 476 |
-| `src/services/apiModules.test.ts` | 462 |
-| `server.js` | 458 |
-| `tests/server/staticDelivery.test.js` | 405 |
-| `src/App.test.tsx` | 372 |
-| `src/components/AiChat/useAiChatSync.test.ts` | 346 |
-| `server/aiSessions.js` | 330 |
-| `src/components/AiChat/AudioMessage.tsx` | 315 |
-| `tests/server/uploadFiles.test.js` | 310 |
-| `src/components/AiChat/useAiChatSync.ts` | 306 |
+- 删除社交、通话、Hhstu 和旧 APK 运行依赖。
+- Markdown、KaTeX 和 Mermaid 按需加载；流式期间只渲染纯文本。
+- 账户弹窗懒加载，主页面不提前加载管理员表单。
+- 静态资源分层缓存、Express gzip、SSE/媒体压缩过滤和 Nginx 代理优化。
+- public 白名单构建，历史音频、上传和视频不会进入 `dist`。
+- 上传目录总量、文件数、请求频率和单文件大小均有限制。
+- 聊天和媒体使用有界并发/队列，避免多用户直接压满上游与本机资源。
 
-优先拆分建议：`aiProviders.js` 按聊天/搜索/语音/图片 provider 拆分；`aiRoutes.js` 按会话/任务/媒体路由拆分；`globals.css` 按 shell/chat/media 分层。任何拆分都应先保持现有导出和 HTTP 合约。
+最初 AI 路由关键资源约为 2.36 MB raw / 678 KB gzip。最终构建资源和相对降幅在本轮全量构建后记录到第 10 节。
 
-## 8. 超长函数
+## 7. 编码与冗余清理
 
-口径：使用项目当前 `typescript` AST 解析 `.js/.mjs/.ts/.tsx`，函数跨度包含注释、空行及其内部嵌套函数；阈值为严格大于 80 行。factory、React 组件、hook 和测试 `describe` callback 的跨度不能直接等同于圈复杂度。
+- `.editorconfig` 固定 UTF-8/LF；自动测试拒绝 mojibake、replacement/private-use 字符回流。
+- `src/services/api.ts` 已从巨石实现收缩为兼容导出入口，HTTP、认证、任务和上传分别由小模块负责。
+- 删除不可达社交、Socket.IO、Hhstu、AI 通话和下载子项目代码。
+- 运行时媒体移入 `storage/`；构建和发布包明确排除用户数据、密钥、证书、媒体和 `node_modules/`。
+- 公共 AI 错误按 allowlist 映射为中文，原始上游错误只进入服务器日志。
+- 所有公网上游 URL 必须使用 HTTPS；HTTP 只允许规范 loopback/私网地址，带 URL 凭据或非规范 IP 的配置会拒绝启动。
 
-### 运行时代码
+## 8. 生产结构与部署边界
 
-| 函数/组件 | 位置 | AST 行跨度 |
-| --- | --- | ---: |
-| `createAiProviders` | `server/aiProviders.js:7` | 1,434 |
-| `registerAiRoutes` | `server/aiRoutes.js:4` | 747 |
-| `createAiTaskStore` | `server/aiTasks.js:1` | 485 |
-| `createAiSessionStore` | `server/aiSessions.js:1` | 330 |
-| `useAiChatSync` | `src/components/AiChat/useAiChatSync.ts:19` | 288 |
-| `runAiTask` | `server/aiTasks.js:191` | 224 |
-| `MessageBubbleComponent` | `src/components/Chat/MessageBubble.tsx:20` | 201 |
-| `AudioMessage` | `src/components/AiChat/AudioMessage.tsx:17` | 195 |
-| `App` | `src/App.tsx:288` | 191 |
-| `useAiChatActions` | `src/components/AiChat/useAiChatActions.ts:42` | 190 |
-| `performStreamingChatCompletion` | `server/aiProviders.js:950` | 182 |
-| `AppSidebar` | `src/App.tsx:115` | 172 |
-| `MarkdownContent` | `src/components/Chat/MarkdownContent.tsx:13` | 167 |
-| `performImageGeneration` | `server/aiProviders.js:1248` | 164 |
-| Zustand persist callback | `src/store/chatStore.ts:65` | 156 |
-| `AiChat` | `src/components/AiChat/AiChat.tsx:62` | 133 |
-| task poll callback | `src/components/AiChat/useAiChatSync.ts:72` | 120 |
-| `POST` callback | `server/aiRoutes.js:631` | 119 |
-| `createServerConfig` | `server/config.js:19` | 114 |
-| `createWavRecorder` | `src/utils/audioCapture.ts:188` | 111 |
-| `MessageList` | `src/components/Chat/MessageList.tsx:16` | 106 |
-| `VoiceRecorder` | `src/components/AiChat/AudioMessage.tsx:219` | 97 |
-| Markdown effect callback | `src/components/Chat/MarkdownContent.tsx:75` | 96 |
-| `createVideoProvider` | `server/videoProvider.js:79` | 93 |
-| `POST` callback | `server/aiRoutes.js:539` | 91 |
-| `performChatCompletion` | `server/aiProviders.js:861` | 88 |
-| `POST` callback | `server/aiRoutes.js:353` | 88 |
-| `createVideoFileStore` | `server/videoFiles.js:95` | 87 |
-| `ImageMessage` | `src/components/Chat/ImageMessage.tsx:39` | 84 |
-| `POST` callback | `server/aiRoutes.js:271` | 81 |
-| `createUploadFileStore` | `server/uploadFiles.js:33` | 81 |
+生产采用时间戳 release 与原子软链接：
 
-### 测试 callback
+```text
+/www/wwwroot/chat-app -> /www/wwwroot/chat-app-releases/<release-id>
+/www/wwwroot/chat-app-shared/.env
+/www/wwwroot/chat-app-shared/storage/
+hello-kitty-chat.service -> Node 3000
+Nginx -> HTTPS -> 127.0.0.1:3000
+```
 
-| 位置 | AST 行跨度 |
-| --- | ---: |
-| `src/App.test.tsx:92` | 281 |
-| `src/components/AiChat/useAiChatSync.test.ts:72` | 275 |
-| `src/utils/aiOwner.test.ts:15` | 157 |
-| `tests/server/uploadFiles.test.js:116` | 195 |
-| `src/components/Chat/MarkdownContent.test.tsx:17` | 126 |
-| `src/services/apiModules.test.ts:235` | 125 |
-| `tests/server/staticDelivery.test.js:190` | 103 |
-| `src/components/AiChat/useAiChatActions.test.ts:119` | 92 |
-| `tests/server/staticDelivery.test.js:321` | 85 |
-| `src/services/apiModules.test.ts:361` | 81 |
+服务器同时运行其他程序。本轮只允许操作上述聊天应用路径和 `hello-kitty-chat.service`，不修改其他服务、端口或站点。部署前必须备份当前 release 指针、共享 `.env`、主数据、备份数据和遗留根数据；新 release 安装完成、依赖和静态产物检查通过后才切换软链接。
 
-## 9. 风险与处理状态
+部署前检查发现旧图片/Grok 上游仍使用公网 HTTP。已验证同一服务存在可用 HTTPS 端点和所需模型；上线时只替换 URL，不更换模型或密钥，也不调用付费生成做冒烟。
 
-| 风险 | 状态 | 当前判断/后续动作 |
-| --- | --- | --- |
-| 构建/发布包夹带历史媒体 | 已处理 | public 白名单、构建失败检查、发布输入与归档条目双校验；尚需在线上首次部署验证旧副本已不可达 |
-| 乱码回流 | 已处理 | UTF-8 规则与自动测试覆盖 |
-| 不可达模块与职责混乱 | 已处理 | 可达性测试、API 拆分、AI-only 目录边界 |
-| owner/会话竞态 | 已处理 | XOR owner、请求代次、taskId 相关性与终态哨兵 |
-| 社交、Socket.IO、Hhstu、AI 通话暴露 | 已处理 | 主项目源码、依赖、路由、代理配置和发布说明均移除 |
-| 上传滥用与磁盘/inode 耗尽 | 已处理基础保护 | 默认 1 GiB/5,000 文件双配额、60 秒 usage 缓存+成功增量+超限重扫、10 分钟 30 次限流、严格十进制启动校验、loopback-only XFF 和单文件限制；生产仍应监控容量 |
-| API 无服务端认证/BOLA | **高，未处理** | owner ID 由客户端提供，缺少可信身份绑定；应引入服务端会话/签名 token，并对每个 session/task/media 做授权校验 |
-| 历史密码/账号字段 | **高，待迁移确认** | 登录路由已删除，新安装不再生成旧字段；兼容读取仍保留旧 JSON 的未知字段。因数据为 opaque 且未读取，需由受权迁移脚本先备份、哈希/清除后验证 |
-| JSON 同步持久化 | **中，未处理** | `readFileSync/writeFileSync` 在数据增大和并发时阻塞事件循环；应迁移到 SQLite/PostgreSQL 或串行异步写队列 |
-| AI 任务进程内状态与并发 | **中，未处理** | 活跃任务使用进程内 `Map`，缺少跨进程队列、全局并发/配额和持久任务租约；应引入队列、TTL 清理和限流 |
-| 上游明文 HTTP 默认值 | **高，未处理** | legacy/Grok 图片默认 URL 仍含 HTTP；生产必须显式配置 HTTPS，后续删除不安全默认值 |
-| 上游可用性/超时 | 部分处理 | 通用 HTTP 客户端已有超时/重试，视频有轮询超时；仍需 provider 级熔断、并发限制、指标和告警 |
-| 真实凭据曾在聊天暴露 | **紧急，外部动作** | 部署前立即轮换服务器凭据与仓库令牌；本文档不复述其值 |
+## 9. 剩余风险
 
-## 10. 验证结果
+| 风险 | 当前处理 |
+| --- | --- |
+| JSON 同步写入随历史增长阻塞事件循环 | 当前仍为单进程原子 JSON；生产数据约 16.7 MB。下一阶段优先迁移 SQLite/PostgreSQL 或异步串行写队列 |
+| 多 Node 实例会突破内存锁和 JSON 原子假设 | 当前 systemd 只运行一个 Node 进程；禁止 PM2 cluster/多副本，迁移数据库和外部队列后再横向扩容 |
+| 无短信验证的密码找回 | 只允许管理员人工核验后重置；后续接入短信 OTP 再开放自助流程 |
+| provider 熔断和指标不足 | 已有超时、重试、并发和队列；后续增加成功率、延迟、队列深度和余额异常告警 |
+| systemd 当前以 root 运行 | 本轮不在功能发布中同时迁移权限；后续单独验证共享目录属主后切到最小权限用户 |
+| 曾在聊天中暴露过运维凭据 | 不进入源码、文档或发布包；所有者仍需在部署后轮换服务器密码和仓库令牌 |
 
-本地最终验证基线：
+## 10. 最终验证与部署结果
 
-- Vitest：**33 个测试文件，272/272 通过**。
-- ESLint：通过。
-- TypeScript + Vite + `scripts/verify-build-output.js`：通过。
-- 构建中不存在 `dist/audios`、`dist/uploads` 或 `dist/videos`，public 安全资产复制测试通过。
-- UTF-8/mojibake/replacement/private-use 扫描：通过。
+发布前本地证据（2026-07-13）：
 
-静态服务隔离烟测、gzip/cache 响应头和最终移动端浏览器验收由主任务在文档完成后汇总；此处不虚构结果。没有执行阿里云部署或线上 API 验证。
+- `npm test`：54 个测试文件，804/804 通过；`npm run lint` 和 `npm run build` 退出 0。
+- `git diff --check` 无 whitespace 错误；UTF-8/逆向 mojibake、冲突标记和生产 secret 格式扫描无命中。
+- HTML 初始引用合计 243,710 bytes raw / 72,601 bytes gzip；加载 AI 页面 chunk 后合计 299,309 bytes raw / 90,387 bytes gzip。相对最初约 2.36 MB raw / 678 KB gzip，分别下降约 87.3% 和 86.7%。
+- 隔离数据与临时管理员下，320x568、375x812、1280x900 三种视口无横向溢出；附件菜单为不透明白底、z-index 40，打开侧栏后菜单收起；登录拦截和管理员账户控件通过。
+- 构建产物校验确认 `dist/` 不包含 `.env`、运行时数据、上传、音频或视频目录。
 
-## 11. 建议顺序
-
-1. 立即轮换已暴露凭据，并在隔离环境完成生产 `.env` HTTPS 配置。
-2. 增加服务端身份认证与 session/task/media 授权，优先关闭 BOLA 风险。
-3. 对旧数据做受控备份和账号/密码字段迁移；不要直接人工编辑生产 JSON。
-4. 将 JSON 持久化和内存任务迁移到数据库/队列，加入并发、TTL、配额、指标和告警。
-5. 在兼容测试保护下继续拆分 `aiProviders.js`、`aiRoutes.js` 与语音 hook。
-6. 按根 README 的 allowlist 流程部署，再验证健康、静态缓存、gzip、媒体 404 和移动端交互。
+生产 release、线上 API 冒烟、systemd/Nginx 日志、RSS、权限和迁移结果在实际部署后追加；本节不预先把计划值写成成功结果。

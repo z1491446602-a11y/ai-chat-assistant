@@ -3,6 +3,7 @@ import * as api from './api';
 import {
   cancelServerAiTask,
   clearServerAiSessions,
+  createClientRequestId,
   createServerAiChatTask,
   createServerAiImageTask,
   createServerAiSession,
@@ -17,7 +18,7 @@ import type {
   ImageGenerationProvider,
   ServerAiTask,
 } from './aiTasksApi';
-import { fetchWithSingleRetry } from './http';
+import { subscribeToSessionExpired } from './http';
 import type {
   AiTaskOwner as BarrelAiTaskOwner,
   ImageGenerationProvider as BarrelImageGenerationProvider,
@@ -87,8 +88,8 @@ const aiTaskOwnerRequestCases: ReadonlyArray<
       topP: 1,
     }),
   ],
-  ['create image task', owner => createServerAiImageTask(owner, null, 'draw', [], 'gpt')],
-  ['create video task', owner => createServerAiVideoTask(owner, null, 'animate', [])],
+  ['create image task', owner => createServerAiImageTask(owner, null, 'draw', [], 'gpt', 'request-1')],
+  ['create video task', owner => createServerAiVideoTask(owner, null, 'animate', [], 'request-1')],
   ['fetch task', owner => fetchServerAiTask('task-1', owner)],
   ['cancel task', owner => cancelServerAiTask('task-1', owner)],
 ];
@@ -141,47 +142,6 @@ describe('AI task owner contract', () => {
       await expect(request(owner)).rejects.toThrow(INVALID_AI_TASK_OWNER_ERROR);
       expect(fetchMock()).not.toHaveBeenCalled();
     });
-  });
-});
-
-describe('fetchWithSingleRetry', () => {
-  it('waits 350ms and retries one network failure', async () => {
-    vi.useFakeTimers();
-    const response = jsonResponse({ ok: true });
-    const request = vi.fn()
-      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
-      .mockResolvedValueOnce(response);
-
-    const resultPromise = fetchWithSingleRetry(request, '请求失败');
-
-    expect(request).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(349);
-    expect(request).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1);
-
-    await expect(resultPromise).resolves.toBe(response);
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it('uses the user-facing fallback after the retry also has a network failure', async () => {
-    vi.useFakeTimers();
-    const request = vi.fn().mockRejectedValue(new TypeError('NetworkError'));
-    const resultPromise = expect(
-      fetchWithSingleRetry(request, '图片请求失败，请稍后重试'),
-    ).rejects.toThrow('图片请求失败，请稍后重试');
-
-    await vi.advanceTimersByTimeAsync(350);
-
-    await resultPromise;
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it('does not retry a non-network error', async () => {
-    const error = new Error('permission denied');
-    const request = vi.fn().mockRejectedValue(error);
-
-    await expect(fetchWithSingleRetry(request, '请求失败')).rejects.toBe(error);
-    expect(request).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -245,6 +205,78 @@ describe('AI task API module', () => {
   };
   const taskResult = { task, sessionId: 'session-1', messageId: 'message-1' };
 
+  it('uses crypto.randomUUID for a new client request ID when available', () => {
+    const randomUUID = vi.fn(() => '018f9f36-659a-7c92-bca1-8f2cc4b747f0');
+    const getRandomValues = vi.fn();
+    vi.stubGlobal('crypto', { randomUUID, getRandomValues });
+
+    expect(createClientRequestId()).toBe('018f9f36-659a-7c92-bca1-8f2cc4b747f0');
+    expect(randomUUID).toHaveBeenCalledTimes(1);
+    expect(getRandomValues).not.toHaveBeenCalled();
+  });
+
+  it('uses getRandomValues for a secure UUID fallback', () => {
+    const getRandomValues = vi.fn((bytes: Uint8Array) => {
+      bytes.forEach((_, index) => {
+        bytes[index] = index;
+      });
+      return bytes;
+    });
+    vi.stubGlobal('crypto', { getRandomValues });
+
+    expect(createClientRequestId()).toBe('00010203-0405-4607-8809-0a0b0c0d0e0f');
+    expect(getRandomValues).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      name: 'image',
+      path: '/api/ai-task/image',
+      request: () => Reflect.apply(createServerAiImageTask, undefined, [
+        { userId: 'user-1' },
+        'session-1',
+        'draw',
+        [],
+        'gpt',
+      ]),
+    },
+    {
+      name: 'video',
+      path: '/api/ai-task/video',
+      request: () => Reflect.apply(createServerAiVideoTask, undefined, [
+        { userId: 'user-1' },
+        'session-1',
+        'animate',
+        [],
+      ]),
+    },
+  ])('generates one stable requestId for an older $name helper call', async ({ path, request }) => {
+    const randomUUID = vi.fn(() => 'compatibility-request-id');
+    vi.stubGlobal('crypto', { randomUUID });
+    queueJsonResponse(taskResult);
+
+    await expect(request()).resolves.toEqual(taskResult);
+
+    expect(randomUUID).toHaveBeenCalledTimes(1);
+    expect(fetchMock()).toHaveBeenCalledTimes(1);
+    const [requestPath, requestInit] = fetchMock().mock.calls[0];
+    expect(requestPath).toBe(path);
+    expect(JSON.parse(String(requestInit?.body))).toMatchObject({
+      requestId: 'compatibility-request-id',
+    });
+  });
+
+  it.each([
+    ['the secure random API is unavailable', {}],
+    ['randomUUID throws', { randomUUID: () => { throw new Error('crypto provider failed'); } }],
+    ['getRandomValues throws', { getRandomValues: () => { throw new Error('crypto provider failed'); } }],
+  ])('localizes request ID generation failure when %s', (_case, cryptoApi) => {
+    vi.stubGlobal('crypto', cryptoApi);
+
+    expect(() => createClientRequestId())
+      .toThrow('无法生成安全请求标识，请刷新页面后重试');
+  });
+
   it('keeps the chat task path and complete request body unchanged', async () => {
     queueJsonResponse(taskResult);
     const files = [{ fileName: 'note.txt', fileUrl: '/files/note.txt', fileSize: 4, mimeType: 'text/plain' }];
@@ -285,43 +317,58 @@ describe('AI task API module', () => {
     });
   });
 
-  it('keeps image-task payloads and the single 350ms network retry', async () => {
-    vi.useFakeTimers();
-    fetchMock()
-      .mockRejectedValueOnce(new TypeError('fetch failed'))
-      .mockResolvedValueOnce(jsonResponse(taskResult));
-    const expectedRequest = {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        guestId: 'guest-1',
-        sessionId: null,
-        prompt: 'draw a cat',
-        images: ['image-1'],
-        imageProvider: 'grok',
-      }),
-    };
+  it('does not retry an ordinary chat POST and localizes its network failure', async () => {
+    fetchMock().mockRejectedValue(new TypeError('fetch failed'));
 
-    const resultPromise = createServerAiImageTask(
+    await expect(createServerAiChatTask(
       { guestId: 'guest-1' },
-      null,
-      'draw a cat',
-      ['image-1'],
-      'grok',
-    );
-    await vi.advanceTimersByTimeAsync(350);
+      'session-1',
+      'hello',
+      [],
+      [],
+      {
+        endpoint: '/api/chat',
+        apiKey: '',
+        model: 'deepseek-v4',
+        temperature: 0.7,
+        maxTokens: 2048,
+        topP: 1,
+      },
+    )).rejects.toThrow('聊天请求失败，请检查网络后重试');
+    expect(fetchMock()).toHaveBeenCalledTimes(1);
+  });
 
-    await expect(resultPromise).resolves.toEqual(taskResult);
-    expect(fetchMock()).toHaveBeenCalledTimes(2);
-    expect(fetchMock()).toHaveBeenNthCalledWith(1, '/api/ai-task/image', expectedRequest);
-    expect(fetchMock()).toHaveBeenNthCalledWith(2, '/api/ai-task/image', expectedRequest);
+  it('keeps a structured server business error for an ordinary chat request', async () => {
+    queueJsonResponse({ error: '模型服务额度不足' }, 429);
+
+    await expect(createServerAiChatTask(
+      { userId: 'user-1' },
+      'session-1',
+      'hello',
+      [],
+      [],
+      {
+        endpoint: '/api/chat',
+        apiKey: '',
+        model: 'deepseek-v4',
+        temperature: 0.7,
+        maxTokens: 2048,
+        topP: 1,
+      },
+    )).rejects.toThrow('模型服务额度不足');
   });
 
   it('keeps the video task path and body unchanged', async () => {
     queueJsonResponse(taskResult);
 
     await expect(
-      createServerAiVideoTask({ guestId: 'guest-1' }, undefined, 'animate', ['image-1']),
+      createServerAiVideoTask(
+        { guestId: 'guest-1' },
+        undefined,
+        'animate',
+        ['image-1'],
+        'request-video-1',
+      ),
     ).resolves.toEqual(taskResult);
     expect(fetchMock()).toHaveBeenCalledWith('/api/ai-task/video', {
       method: 'POST',
@@ -331,8 +378,133 @@ describe('AI task API module', () => {
         sessionId: undefined,
         prompt: 'animate',
         images: ['image-1'],
+        requestId: 'request-video-1',
       }),
     });
+  });
+
+  it.each([
+    {
+      name: 'image',
+      request: (requestId: string) => createServerAiImageTask(
+        { userId: 'user-1' },
+        'session-1',
+        'draw',
+        [],
+        'gpt',
+        requestId,
+      ),
+    },
+    {
+      name: 'video',
+      request: (requestId: string) => createServerAiVideoTask(
+        { userId: 'user-1' },
+        'session-1',
+        'animate',
+        [],
+        requestId,
+      ),
+    },
+  ])('retries one $name network failure with the same requestId and request body', async ({ request }) => {
+    fetchMock()
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce(jsonResponse(taskResult));
+
+    await expect(request('request-network-retry')).resolves.toEqual(taskResult);
+
+    expect(fetchMock()).toHaveBeenCalledTimes(2);
+    const firstRequest = fetchMock().mock.calls[0];
+    const secondRequest = fetchMock().mock.calls[1];
+    expect(secondRequest).toEqual(firstRequest);
+    const body = JSON.parse(String(firstRequest?.[1]?.body));
+    expect(body.requestId).toBe('request-network-retry');
+  });
+
+  it.each([
+    {
+      name: 'image',
+      fallback: '图片请求失败，请稍后重试',
+      request: () => createServerAiImageTask(
+        { userId: 'user-1' },
+        'session-1',
+        'draw',
+        [],
+        'gpt',
+        'request-image-failure',
+      ),
+    },
+    {
+      name: 'video',
+      fallback: '视频请求失败，请稍后重试',
+      request: () => createServerAiVideoTask(
+        { userId: 'user-1' },
+        'session-1',
+        'animate',
+        [],
+        'request-video-failure',
+      ),
+    },
+  ])('stops after two $name network attempts', async ({ fallback, request }) => {
+    fetchMock().mockRejectedValue(new TypeError('fetch failed'));
+
+    await expect(request()).rejects.toThrow(fallback);
+    expect(fetchMock()).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    {
+      name: 'image',
+      request: () => createServerAiImageTask(
+        { userId: 'user-1' },
+        'session-1',
+        'draw',
+        [],
+        'gpt',
+        'request-image-http',
+      ),
+    },
+    {
+      name: 'video',
+      request: () => createServerAiVideoTask(
+        { userId: 'user-1' },
+        'session-1',
+        'animate',
+        [],
+        'request-video-http',
+      ),
+    },
+  ])('does not retry a $name HTTP error response', async ({ request }) => {
+    fetchMock().mockResolvedValue(jsonResponse({ error: '服务暂时不可用' }, 503));
+
+    await expect(request()).rejects.toThrow('服务暂时不可用');
+    expect(fetchMock()).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      name: 'image',
+      request: () => createServerAiImageTask(
+        { userId: 'user-1' },
+        'session-1',
+        'draw',
+        [],
+        'gpt',
+        '   ',
+      ),
+    },
+    {
+      name: 'video',
+      request: () => createServerAiVideoTask(
+        { userId: 'user-1' },
+        'session-1',
+        'animate',
+        [],
+        '',
+      ),
+    },
+  ])('rejects a blank $name requestId before fetch', async ({ request }) => {
+    await expect(request()).rejects.toThrow('Invalid media requestId');
+    expect(fetchMock()).not.toHaveBeenCalled();
   });
 
   it('keeps task owner queries, cancel method, and transcription body unchanged', async () => {
@@ -403,13 +575,13 @@ describe('AI API non-JSON errors', () => {
       name: 'create image task',
       body: null,
       fallback: '提交图片生成任务失败',
-      request: () => createServerAiImageTask('user-1', null, 'draw', [], 'gpt'),
+      request: () => createServerAiImageTask('user-1', null, 'draw', [], 'gpt', 'request-image-error'),
     },
     {
       name: 'create video task',
       body: '<html>bad gateway</html>',
       fallback: '提交视频生成任务失败',
-      request: () => createServerAiVideoTask('user-1', null, 'animate', []),
+      request: () => createServerAiVideoTask('user-1', null, 'animate', [], 'request-video-error'),
     },
     {
       name: 'fetch task',
@@ -437,6 +609,47 @@ describe('AI API non-JSON errors', () => {
     queueJsonResponse({ error: '服务端详细错误' }, 500);
 
     await expect(fetchServerAiTask('task-1', 'user-1')).rejects.toThrow('服务端详细错误');
+  });
+
+  it('reports a 401 through the shared session-expiry channel', async () => {
+    const onSessionExpired = vi.fn();
+    const unsubscribe = subscribeToSessionExpired(onSessionExpired);
+    queueJsonResponse({ error: '登录已过期' }, 401);
+
+    await expect(fetchServerAiTask('task-1', 'user-1')).rejects.toMatchObject({
+      message: '登录已过期',
+      status: 401,
+    });
+
+    expect(onSessionExpired).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+});
+
+describe('AI API network errors', () => {
+  const config = {
+    endpoint: '/api/chat',
+    apiKey: 'key',
+    model: 'deepseek-v4',
+    temperature: 0.7,
+    maxTokens: 2048,
+    topP: 1,
+  };
+
+  it.each([
+    ['fetch sessions', '加载 AI 历史失败，请检查网络后重试', () => fetchServerAiSessions('user-1')],
+    ['create session', '创建 AI 会话失败，请检查网络后重试', () => createServerAiSession('user-1')],
+    ['delete session', '删除聊天记录失败，请检查网络后重试', () => deleteServerAiSession('user-1', 'session-1')],
+    ['clear sessions', '清空聊天记录失败，请检查网络后重试', () => clearServerAiSessions('user-1')],
+    ['create chat task', '聊天请求失败，请检查网络后重试', () => createServerAiChatTask('user-1', null, 'hello', [], [], config)],
+    ['fetch task', '加载任务状态失败，请检查网络后重试', () => fetchServerAiTask('task-1', 'user-1')],
+    ['cancel task', '停止任务失败，请检查网络后重试', () => cancelServerAiTask('task-1', 'user-1')],
+    ['transcribe audio', '语音转文字失败，请检查网络后重试', () => transcribeAiCallAudio('base64-audio')],
+  ])('localizes a $s network failure', async (_name, fallback, request) => {
+    fetchMock().mockRejectedValueOnce(new TypeError('fetch failed'));
+
+    await expect(request()).rejects.toThrow(fallback);
+    expect(fetchMock()).toHaveBeenCalledTimes(1);
   });
 });
 

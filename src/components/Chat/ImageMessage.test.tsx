@@ -38,7 +38,10 @@ describe('ImageMessage', () => {
     const { container } = render(<ImageMessage message={message} />);
     const image = container.querySelector('img');
     const download = screen.getByRole('link', { name: '下载图片' });
+    const surface = download.closest('.overflow-hidden');
 
+    expect(surface?.className).toContain('min-w-0');
+    expect(surface?.className).toContain('max-w-full');
     expect(image?.getAttribute('src')).toBe('/uploads/generated.png');
     expect(image?.className).toContain('object-contain');
     expect(screen.getByText('GPT · 1536×1024 · 2.5 MB')).toBeTruthy();

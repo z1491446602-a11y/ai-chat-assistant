@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AiChatComposerAttachments } from './AiChatComposerAttachments';
+
+afterEach(cleanup);
 
 const imageProviderOptions = [
   { value: 'gpt' as const, label: '生成图片-GPT' },
@@ -20,6 +22,9 @@ function renderComposer(patch = {}) {
     isGeneratingVideoTask: false,
     isUploadingImages: false,
     isUploadingFile: false,
+    disabled: false,
+    mediaEnabled: true,
+    onRequireLogin: vi.fn(),
     onToggleImageProviderMenu: vi.fn(),
     onSelectImageProvider: vi.fn(),
     onToggleImageGenerationMode: vi.fn(),
@@ -56,6 +61,73 @@ describe('AI chat composer actions', () => {
     expect(onSelectImageProvider).toHaveBeenCalledWith('grok');
   });
 
+  it('opens login instead of media controls for guests', () => {
+    const onRequireLogin = vi.fn();
+    const onToggleImageGenerationMode = vi.fn();
+    const onToggleVideoGenerationMode = vi.fn();
+    const view = renderComposer({
+      mediaEnabled: false,
+      onRequireLogin,
+      onToggleImageGenerationMode,
+      onToggleVideoGenerationMode,
+    });
+
+    fireEvent.click(within(view.container).getByRole('button', { name: '生成图片-GPT' }));
+    fireEvent.click(within(view.container).getByRole('button', { name: '生成视频' }));
+
+    expect(onRequireLogin).toHaveBeenCalledTimes(2);
+    expect(onToggleImageGenerationMode).not.toHaveBeenCalled();
+    expect(onToggleVideoGenerationMode).not.toHaveBeenCalled();
+  });
+
+  it('keeps ordinary attachment pickers available for a resolved guest', () => {
+    const onOpenMoreActions = vi.fn();
+    const onOpenAiImagePicker = vi.fn();
+    const onOpenAiFilePicker = vi.fn();
+    renderComposer({
+      mediaEnabled: false,
+      showMoreActions: true,
+      onOpenMoreActions,
+      onOpenAiImagePicker,
+      onOpenAiFilePicker,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '更多操作' }));
+    fireEvent.click(screen.getByRole('button', { name: '上传图片' }));
+    fireEvent.click(screen.getByRole('button', { name: '上传文档' }));
+
+    expect(onOpenMoreActions).toHaveBeenCalledTimes(1);
+    expect(onOpenAiImagePicker).toHaveBeenCalledTimes(1);
+    expect(onOpenAiFilePicker).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables attachment and media controls while authentication is unresolved', () => {
+    const callbacks = {
+      onRequireLogin: vi.fn(),
+      onOpenMoreActions: vi.fn(),
+      onOpenAiImagePicker: vi.fn(),
+      onOpenAiFilePicker: vi.fn(),
+      onToggleImageGenerationMode: vi.fn(),
+      onToggleVideoGenerationMode: vi.fn(),
+    };
+    renderComposer({ disabled: true, showMoreActions: true, ...callbacks });
+
+    const buttons = [
+      screen.getByRole('button', { name: '更多操作' }),
+      screen.getByRole('button', { name: '上传图片' }),
+      screen.getByRole('button', { name: '上传文档' }),
+      screen.getByRole('button', { name: '生成图片-GPT' }),
+      screen.getByRole('button', { name: '选择图片生成模型' }),
+      screen.getByRole('button', { name: '生成视频' }),
+    ] as HTMLButtonElement[];
+
+    buttons.forEach(button => {
+      expect(button.disabled).toBe(true);
+      fireEvent.click(button);
+    });
+    Object.values(callbacks).forEach(callback => expect(callback).not.toHaveBeenCalled());
+  });
+
   it('renders attachment popovers as opaque surfaces below navigation overlays', () => {
     const moreActions = renderComposer({ showMoreActions: true });
     const moreActionsMenu = moreActions.container.querySelector('.absolute.bottom-12');
@@ -74,5 +146,12 @@ describe('AI chat composer actions', () => {
     expect(providerMenu?.className).toContain('z-40');
     expect(providerMenu?.className).not.toContain('bg-white/96');
     expect(providers.container.innerHTML).not.toContain('z-[80]');
+  });
+
+  it('collapses media labels below 361px so the toolbar stays within a 320px viewport', () => {
+    renderComposer();
+
+    expect(screen.getByText('GPT 生图').className).toContain('max-[360px]:hidden');
+    expect(screen.getByText('生成视频').className).toContain('max-[360px]:hidden');
   });
 });

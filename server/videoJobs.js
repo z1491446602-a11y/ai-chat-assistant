@@ -5,6 +5,8 @@ const PERSISTED_FIELDS = [
   'upstreamTaskId', 'status', 'stage', 'error', 'createdAt', 'updatedAt',
 ];
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'canceled']);
+export const MAX_VIDEO_JOBS = 1_000;
+export const MAX_VIDEO_PROMPT_LENGTH = 10_000;
 
 function pickPersistedFields(value) {
   const record = {};
@@ -18,11 +20,32 @@ function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
 }
 
+function pruneVideoJobs(videoJobs) {
+  const entries = Object.entries(videoJobs);
+  const excess = entries.length - MAX_VIDEO_JOBS;
+  if (excess <= 0) return;
+
+  entries
+    .sort(([, left], [, right]) => {
+      const leftTerminal = TERMINAL_STATUSES.has(String(left?.status || '').toLowerCase());
+      const rightTerminal = TERMINAL_STATUSES.has(String(right?.status || '').toLowerCase());
+      if (leftTerminal !== rightTerminal) return leftTerminal ? -1 : 1;
+      return (Number(left?.updatedAt) || Number(left?.createdAt) || 0)
+        - (Number(right?.updatedAt) || Number(right?.createdAt) || 0);
+    })
+    .slice(0, excess)
+    .forEach(([id]) => {
+      delete videoJobs[id];
+    });
+}
+
 export function createVideoJobStore({ data: sharedData, loadData, saveData, now = Date.now, generateId = randomUUID } = {}) {
   function readData() {
     const data = loadData ? (loadData() || {}) : (sharedData || {});
-    if (!data.videoJobs || typeof data.videoJobs !== 'object' || Array.isArray(data.videoJobs)) {
+    if (!Object.hasOwn(data, 'videoJobs')) {
       data.videoJobs = {};
+    } else if (!data.videoJobs || typeof data.videoJobs !== 'object' || Array.isArray(data.videoJobs)) {
+      throw new TypeError('Persisted videoJobs must be an object');
     }
     return data;
   }
@@ -36,7 +59,7 @@ export function createVideoJobStore({ data: sharedData, loadData, saveData, now 
       sessionId: String(input.sessionId || ''),
       messageId: String(input.messageId || ''),
       userMessageId: String(input.userMessageId || ''),
-      prompt: String(input.prompt || ''),
+      prompt: String(input.prompt || '').slice(0, MAX_VIDEO_PROMPT_LENGTH),
       upstreamTaskId: String(input.upstreamTaskId || ''),
       status: String(input.status || 'pending'),
       stage: String(input.stage || input.videoStage || 'created'),
@@ -45,8 +68,15 @@ export function createVideoJobStore({ data: sharedData, loadData, saveData, now 
       updatedAt: timestamp,
     });
     const data = readData();
+    const previousJobs = { ...data.videoJobs };
     data.videoJobs[job.id] = job;
-    saveData(data);
+    pruneVideoJobs(data.videoJobs);
+    try {
+      saveData(data);
+    } catch (error) {
+      data.videoJobs = previousJobs;
+      throw error;
+    }
     return clone(job);
   }
 
@@ -63,10 +93,35 @@ export function createVideoJobStore({ data: sharedData, loadData, saveData, now 
     const allowedChanges = pickPersistedFields(changes);
     delete allowedChanges.id;
     delete allowedChanges.createdAt;
+    if (allowedChanges.prompt !== undefined) {
+      allowedChanges.prompt = String(allowedChanges.prompt).slice(0, MAX_VIDEO_PROMPT_LENGTH);
+    }
     const updated = pickPersistedFields({ ...existing, ...allowedChanges, id: key, updatedAt: now() });
     data.videoJobs[key] = updated;
-    saveData(data);
+    try {
+      saveData(data);
+    } catch (error) {
+      data.videoJobs[key] = existing;
+      throw error;
+    }
     return clone(updated);
+  }
+
+  function remove(id) {
+    const data = readData();
+    const key = String(id || '');
+    if (!Object.prototype.hasOwnProperty.call(data.videoJobs, key)) {
+      return false;
+    }
+    const previousJob = data.videoJobs[key];
+    delete data.videoJobs[key];
+    try {
+      saveData(data);
+    } catch (error) {
+      data.videoJobs[key] = previousJob;
+      throw error;
+    }
+    return true;
   }
 
   function getRecoveryPlan() {
@@ -87,6 +142,8 @@ export function createVideoJobStore({ data: sharedData, loadData, saveData, now 
     getVideoJob: get,
     patch,
     patchVideoJob: patch,
+    remove,
+    removeVideoJob: remove,
     getRecoveryPlan,
   };
 }

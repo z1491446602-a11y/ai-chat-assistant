@@ -1,5 +1,6 @@
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import {
+  createClientRequestId,
   createServerAiChatTask,
   createServerAiImageTask,
   createServerAiSession,
@@ -7,10 +8,12 @@ import {
   type AiTaskOwner,
   type ImageGenerationProvider,
 } from '@/services/api';
+import { isUnauthorizedError } from '@/services/http';
 import { useSettingsStore } from '@/store';
 import type { APIConfig, MessageFile, Session } from '@/types';
 
 interface UseAiChatActionsParams {
+  enabled: boolean;
   aiOwner: AiTaskOwner;
   currentSessionId: string | null;
   aiSessions: Session[];
@@ -40,6 +43,7 @@ interface UseAiChatActionsParams {
 }
 
 export function useAiChatActions({
+  enabled,
   aiOwner,
   currentSessionId,
   aiSessions,
@@ -78,13 +82,13 @@ export function useAiChatActions({
     setIsVideoGenerationMode(false);
   };
 
-  const resetStreamingState = async () => {
+  const resetStreamingState = async (shouldSyncSessions = true) => {
     setStreaming(false, null);
     setStreamingMessageId(undefined);
     currentAiTaskIdRef.current = null;
     currentAiSessionIdRef.current = null;
     currentAiTaskTypeRef.current = null;
-    if (currentSessionId) {
+    if (shouldSyncSessions && currentSessionId) {
       await syncServerAiSessions(currentSessionId);
     }
   };
@@ -125,7 +129,7 @@ export function useAiChatActions({
     try {
       result = await createServerAiChatTask(aiOwner, sessionId, content, images, files, latestApiConfig);
     } catch (error) {
-      await resetStreamingState();
+      await resetStreamingState(!isUnauthorizedError(error));
       throw error;
     }
 
@@ -143,13 +147,21 @@ export function useAiChatActions({
       ? 'grok-imagine-image-quality'
       : 'gpt-image-2';
     const sessionId = await resolveSessionId(imageModel);
+    const requestId = createClientRequestId();
 
     setStreaming(true, null);
     let result;
     try {
-      result = await createServerAiImageTask(aiOwner, sessionId, prompt, images, selectedImageProvider);
+      result = await createServerAiImageTask(
+        aiOwner,
+        sessionId,
+        prompt,
+        images,
+        selectedImageProvider,
+        requestId,
+      );
     } catch (error) {
-      await resetStreamingState();
+      await resetStreamingState(!isUnauthorizedError(error));
       throw error;
     }
 
@@ -164,13 +176,14 @@ export function useAiChatActions({
 
   const submitAiVideoGeneration = async (prompt: string, images: string[] = []) => {
     const sessionId = await resolveSessionId('veo_3_1_fast');
+    const requestId = createClientRequestId();
 
     setStreaming(true, null);
     let result;
     try {
-      result = await createServerAiVideoTask(aiOwner, sessionId, prompt, images);
+      result = await createServerAiVideoTask(aiOwner, sessionId, prompt, images, requestId);
     } catch (error) {
-      await resetStreamingState();
+      await resetStreamingState(!isUnauthorizedError(error));
       throw error;
     }
 
@@ -184,6 +197,10 @@ export function useAiChatActions({
   };
 
   const handleSendAiMessage = async () => {
+    if (!enabled) {
+      return;
+    }
+
     const rawContent = input.trim();
     const images = [...pendingAiImages];
     const files = [...pendingAiFiles];
@@ -220,8 +237,19 @@ export function useAiChatActions({
   };
 
   const handleQuickSuggestion = async (suggestion: string) => {
+    if (!enabled) {
+      return;
+    }
+
     resetComposerState();
-    await submitAiMessage(suggestion);
+    try {
+      await submitAiMessage(suggestion);
+    } catch (error) {
+      console.error('Failed to send quick AI suggestion', error);
+      if (!isUnauthorizedError(error)) {
+        alert('发送快捷问题失败，请稍后重试');
+      }
+    }
   };
 
   return {

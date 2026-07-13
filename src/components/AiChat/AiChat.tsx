@@ -7,13 +7,24 @@ import { AiChatComposer } from './AiChatComposer';
 import { AiChatHeader } from './AiChatHeader';
 import { useAiChatSync } from './useAiChatSync';
 import { useAiChatActions } from './useAiChatActions';
+import { detectImageGenerationMode } from './imageGenerationIntent';
 import { blobToDataUrl, createWavRecorder, type WavRecorderHandle } from '@/utils/audioCapture';
 import { compressVideoReferenceImage, validateVideoReferenceFiles } from './videoGeneration';
+import type { AuthStatus, AuthUser } from '@/services/authApi';
+import { uploadAiDocument } from '@/services/aiUploadsApi';
 
 interface AiChatProps {
   aiOwner: AiTaskOwner;
+  authStatus: AuthStatus;
+  interactionEnabled: boolean;
+  user: AuthUser | null;
   sidebarOpen: boolean;
   refreshAiSessions: (preferredSessionId?: string | null, shouldApply?: () => boolean) => Promise<Session[]>;
+  onRequireLogin: () => void;
+  onAccountClick: () => void;
+  onMediaTaskSettled: (
+    options?: { forceAfterCurrent?: boolean },
+  ) => Promise<boolean> | boolean | void;
 }
 
 const IMAGE_PROVIDER_OPTIONS = [
@@ -54,13 +65,17 @@ function isAiDocumentFile(file: File) {
   const dot = file.name.lastIndexOf('.');
   return AI_DOCUMENT_EXTENSIONS.has(dot >= 0 ? file.name.slice(dot).toLowerCase() : '');
 }
-function detectImageGenerationMode(input: string, imageCount: number): 'generate' | 'edit' | null {
-  const text = input.trim();
-  if (!text || !/(图片生成|生成图片|生成一张|来一张图|画一张|画一个|帮我生成|绘制|文生图|图生图|海报|头像|壁纸|封面)/i.test(text)) return null;
-  return imageCount > 0 || /(参考这张图|根据这张图|用这张图|修改这张图|重绘)/i.test(text) ? 'edit' : 'generate';
-}
-
-export function AiChat({ aiOwner, sidebarOpen, refreshAiSessions }: AiChatProps) {
+export function AiChat({
+  aiOwner,
+  authStatus,
+  interactionEnabled,
+  user,
+  sidebarOpen,
+  refreshAiSessions,
+  onRequireLogin,
+  onAccountClick,
+  onMediaTaskSettled,
+}: AiChatProps) {
   const { sessions, currentSessionId, isStreaming, patchMessage, selectSession, setStreaming, streamingMessageId, setStreamingMessageId } = useChatStore();
   const [input, setInput] = useState('');
   const [showVoiceRecorder, setShowVoiceRecorder] = useState(false);
@@ -92,9 +107,9 @@ export function AiChat({ aiOwner, sidebarOpen, refreshAiSessions }: AiChatProps)
   const selectedImageProviderLabel = IMAGE_PROVIDER_OPTIONS.find(option => option.value === selectedImageProvider)?.label || IMAGE_PROVIDER_OPTIONS[0].label;
   const activeVideoMessage = [...currentAiMessages].reverse().find(message => message.role === 'assistant' && message.status === 'streaming' && message.videoGenerationStage);
 
-  const sync = useAiChatSync({ aiOwner, refreshAiSessions, currentSessionId, currentAiSession, patchMessage, setStreaming, setStreamingMessageId });
+  const sync = useAiChatSync({ aiOwner, interactionEnabled, refreshAiSessions, currentSessionId, currentAiSession, patchMessage, setStreaming, setStreamingMessageId, onMediaTaskSettled });
   const isGeneratingVideoTask = Boolean(isStreaming && (activeVideoMessage || sync.currentAiTaskTypeRef.current === 'video'));
-  const actions = useAiChatActions({ aiOwner, currentSessionId, aiSessions, setStreaming, setStreamingMessageId, selectSession, startServerTaskPolling: sync.startServerTaskPolling, syncServerAiSessions: sync.syncServerAiSessions, currentAiTaskIdRef: sync.currentAiTaskIdRef, currentAiSessionIdRef: sync.currentAiSessionIdRef, currentAiTaskTypeRef: sync.currentAiTaskTypeRef, input, pendingAiImages, pendingAiFiles, pendingAiVideoImages, selectedImageProvider, effectiveImageGenerationMode, isVideoGenerationMode, setInput, setPendingAiImages, setPendingAiFiles, setPendingAiVideoImages, setShowMoreActions, setShowImageProviderMenu, setIsImageGenerationMode, setIsVideoGenerationMode });
+  const actions = useAiChatActions({ enabled: interactionEnabled, aiOwner, currentSessionId, aiSessions, setStreaming, setStreamingMessageId, selectSession, startServerTaskPolling: sync.startServerTaskPolling, syncServerAiSessions: sync.syncServerAiSessions, currentAiTaskIdRef: sync.currentAiTaskIdRef, currentAiSessionIdRef: sync.currentAiSessionIdRef, currentAiTaskTypeRef: sync.currentAiTaskTypeRef, input, pendingAiImages, pendingAiFiles, pendingAiVideoImages, selectedImageProvider, effectiveImageGenerationMode, isVideoGenerationMode, setInput, setPendingAiImages, setPendingAiFiles, setPendingAiVideoImages, setShowMoreActions, setShowImageProviderMenu, setIsImageGenerationMode, setIsVideoGenerationMode });
 
   useEffect(() => {
     if (currentSessionId && aiSessions.some(session => session.id === currentSessionId)) return;
@@ -105,16 +120,32 @@ export function AiChat({ aiOwner, sidebarOpen, refreshAiSessions }: AiChatProps)
     setShowMoreActions(false);
     setShowImageProviderMenu(false);
   }, [sidebarOpen]);
+  useEffect(() => {
+    if (user) return;
+    setShowImageProviderMenu(false);
+    setIsImageGenerationMode(false);
+    setIsVideoGenerationMode(false);
+    setPendingAiVideoImages([]);
+  }, [user]);
   useEffect(() => () => { void cancelPressVoiceInput(); }, []);
 
   async function handleSendMessage() {
+    if (!interactionEnabled) {
+      if (authStatus === 'error') onRequireLogin();
+      return;
+    }
     if (isStreaming) {
       if (!isGeneratingVideoTask) sync.handleAbortAiResponse();
+      return;
+    }
+    if (!user && (effectiveImageGenerationMode || isVideoGenerationMode)) {
+      onRequireLogin();
       return;
     }
     await actions.handleSendAiMessage();
   }
   async function handleAiVoiceInput(audioBlob: Blob) {
+    if (!interactionEnabled) return;
     try {
       const transcript = await transcribeAiCallAudio(await blobToDataUrl(audioBlob), audioBlob.type || 'audio/wav');
       if (!transcript) throw new Error('未识别到有效语音内容');
@@ -127,6 +158,7 @@ export function AiChat({ aiOwner, sidebarOpen, refreshAiSessions }: AiChatProps)
     }
   }
   async function handleAddAiImages(files: File[]) {
+    if (!interactionEnabled) return;
     const images = files.filter(file => file.type.startsWith('image/'));
     if (!images.length) return;
     setIsUploadingImages(true);
@@ -138,6 +170,7 @@ export function AiChat({ aiOwner, sidebarOpen, refreshAiSessions }: AiChatProps)
     finally { setIsUploadingImages(false); setShowMoreActions(false); }
   }
   async function handleAddAiVideoImages(files: File[]) {
+    if (!interactionEnabled) return;
     setIsUploadingImages(true);
     try {
       const compressed = await Promise.all(validateVideoReferenceFiles(files, pendingAiVideoImages.length).map(compressVideoReferenceImage));
@@ -147,21 +180,24 @@ export function AiChat({ aiOwner, sidebarOpen, refreshAiSessions }: AiChatProps)
     finally { setIsUploadingImages(false); setShowMoreActions(false); }
   }
   async function handleAddAiFiles(files: File[]) {
+    if (!interactionEnabled) return;
     const documents = files.filter(isAiDocumentFile);
     if (!documents.length) { alert('请选择 PDF、Word、TXT、表格等文档文件'); return; }
     setIsUploadingFile(true);
     try {
       const uploaded = await Promise.all(documents.slice(0, 3).map(async file => {
-        const response = await fetch('/api/upload-file', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope: 'ai', fileName: file.name, fileData: await readFileAsDataUrl(file), mimeType: file.type }) });
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error || '文件上传失败');
-        return { fileName: result.fileName, fileUrl: result.fileUrl, fileSize: result.fileSize, mimeType: result.mimeType } as MessageFile;
+        return uploadAiDocument({
+          fileName: file.name,
+          fileData: await readFileAsDataUrl(file),
+          mimeType: file.type,
+        });
       }));
       setPendingAiFiles(current => [...current, ...uploaded].slice(0, 3));
     } catch (error) { console.error('Failed to upload AI files', error); alert(error instanceof Error ? error.message : '文件上传失败'); }
     finally { setIsUploadingFile(false); setShowMoreActions(false); }
   }
   async function handleDropFiles(files: File[]) {
+    if (!interactionEnabled) return;
     if (isVideoGenerationMode) { await handleAddAiVideoImages(files); return; }
     const images = files.filter(file => file.type.startsWith('image/'));
     const documents = files.filter(file => !file.type.startsWith('image/') && isAiDocumentFile(file));
@@ -170,7 +206,7 @@ export function AiChat({ aiOwner, sidebarOpen, refreshAiSessions }: AiChatProps)
     if (documents.length) await handleAddAiFiles(documents);
   }
   async function handleStartPressVoiceInput() {
-    if (isPressRecordingVoice || isStreaming || isUploadingImages || isUploadingFile) return;
+    if (!interactionEnabled || isPressRecordingVoice || isStreaming || isUploadingImages || isUploadingFile) return;
     try {
       pressVoiceRecorderRef.current = await createWavRecorder({ targetSampleRate: 16000, trimThreshold: 0.01, trimPaddingMs: 80, constraints: { sampleRate: 16000 }, onLevel: setPressVoiceLevel });
       setIsPressRecordingVoice(true);
@@ -191,10 +227,19 @@ export function AiChat({ aiOwner, sidebarOpen, refreshAiSessions }: AiChatProps)
   }
 
   const canSend = isVideoGenerationMode ? Boolean(input.trim()) : Boolean(input.trim() || pendingAiImages.length || pendingAiFiles.length);
-  const sendButtonDisabled = isStreaming ? isGeneratingVideoTask : (!canSend || isUploadingImages || isUploadingFile);
+  const sendButtonDisabled = !interactionEnabled || (isStreaming ? isGeneratingVideoTask : (!canSend || isUploadingImages || isUploadingFile));
+  const composerPlaceholder = authStatus === 'loading'
+    ? '正在确认登录状态...'
+    : authStatus === 'error'
+      ? '登录状态获取失败，请打开账户重试'
+      : isVideoGenerationMode
+        ? '描述你想生成的视频...'
+        : effectiveImageGenerationMode
+          ? '描述你想生成或编辑的图片...'
+          : '给 AI 日常聊天助手发送消息...';
   return <div className="flex h-full min-w-0 flex-col bg-slate-50">
-    <AiChatHeader />
-    <div className="min-h-0 flex-1"><MessageList messages={currentAiMessages} isStreaming={isStreaming} streamingMessageId={streamingMessageId} onSuggestionClick={suggestion => void actions.handleQuickSuggestion(suggestion)} /></div>
-    <AiChatComposer isStreaming={isStreaming} loading={false} isUploadingImages={isUploadingImages} isUploadingFile={isUploadingFile} sendButtonDisabled={sendButtonDisabled} input={input} placeholder={isVideoGenerationMode ? '描述你想生成的视频...' : effectiveImageGenerationMode ? '描述你想生成或编辑的图片...' : '给 AI 日常聊天助手发送消息...'} showVoiceRecorder={showVoiceRecorder} isPressRecordingVoice={isPressRecordingVoice} pressVoiceLevel={pressVoiceLevel} showMoreActions={showMoreActions && !sidebarOpen} showImageProviderMenu={showImageProviderMenu && !sidebarOpen} selectedImageProviderLabel={selectedImageProviderLabel} effectiveImageGenerationMode={effectiveImageGenerationMode} isVideoGenerationMode={isVideoGenerationMode} isGeneratingVideoTask={isGeneratingVideoTask} pendingAiImages={pendingAiImages} pendingAiFiles={pendingAiFiles} pendingAiVideoImages={pendingAiVideoImages} imageProviderOptions={IMAGE_PROVIDER_OPTIONS} composerRef={composerRef} aiImageInputRef={aiImageInputRef} aiFileInputRef={aiFileInputRef} aiVideoImageInputRef={aiVideoImageInputRef} onInputChange={setInput} onSendMessage={() => void handleSendMessage()} onToggleImageProviderMenu={() => { setShowMoreActions(false); setShowImageProviderMenu(value => !value); }} onSelectImageProvider={provider => { setSelectedImageProvider(provider); setIsImageGenerationMode(true); setIsVideoGenerationMode(false); setShowImageProviderMenu(false); }} onToggleImageGenerationMode={() => { setIsImageGenerationMode(value => !value); setIsVideoGenerationMode(false); setPendingAiVideoImages([]); }} onToggleVideoGenerationMode={() => { if (!isStreaming) { setIsVideoGenerationMode(value => !value); setIsImageGenerationMode(false); setPendingAiImages([]); setPendingAiFiles([]); } }} onRemovePendingAiImage={index => setPendingAiImages(images => images.filter((_, i) => i !== index))} onRemovePendingAiFile={index => setPendingAiFiles(files => files.filter((_, i) => i !== index))} onRemovePendingAiVideoImage={index => setPendingAiVideoImages(images => images.filter((_, i) => i !== index))} onPickAiImages={event => { const files = Array.from(event.target.files || []); event.target.value = ''; void handleAddAiImages(files); }} onPickAiFiles={event => { const files = Array.from(event.target.files || []); event.target.value = ''; void handleAddAiFiles(files); }} onPickAiVideoImages={event => { const files = Array.from(event.target.files || []); event.target.value = ''; void handleAddAiVideoImages(files); }} onDropFiles={files => void handleDropFiles(files)} onCancelVoiceRecorder={() => void cancelPressVoiceInput().then(() => setShowVoiceRecorder(false))} onStartPressVoiceInput={handleStartPressVoiceInput} onStopPressVoiceInput={() => void handleStopPressVoiceInput()} onOpenMoreActions={() => { setShowImageProviderMenu(false); setShowMoreActions(value => !value); }} onOpenAiImagePicker={() => aiImageInputRef.current?.click()} onOpenAiFilePicker={() => aiFileInputRef.current?.click()} onOpenAiVideoImagePicker={() => aiVideoImageInputRef.current?.click()} onOpenVoiceRecorder={() => { void cancelPressVoiceInput(); setShowVoiceRecorder(true); }} />
+    <AiChatHeader authStatus={authStatus} user={user} sidebarOpen={sidebarOpen} onAccountClick={onAccountClick} />
+    <div className="min-h-0 flex-1"><MessageList messages={currentAiMessages} isStreaming={isStreaming} streamingMessageId={streamingMessageId} onSuggestionClick={suggestion => { if (!interactionEnabled) { if (authStatus === 'error') onRequireLogin(); return; } void actions.handleQuickSuggestion(suggestion); }} /></div>
+    <AiChatComposer isStreaming={isStreaming} loading={!interactionEnabled} isUploadingImages={isUploadingImages} isUploadingFile={isUploadingFile} sendButtonDisabled={sendButtonDisabled} input={input} placeholder={composerPlaceholder} showVoiceRecorder={showVoiceRecorder} isPressRecordingVoice={isPressRecordingVoice} pressVoiceLevel={pressVoiceLevel} showMoreActions={showMoreActions && !sidebarOpen} showImageProviderMenu={showImageProviderMenu && !sidebarOpen} selectedImageProviderLabel={selectedImageProviderLabel} effectiveImageGenerationMode={effectiveImageGenerationMode} isVideoGenerationMode={isVideoGenerationMode} isGeneratingVideoTask={isGeneratingVideoTask} pendingAiImages={pendingAiImages} pendingAiFiles={pendingAiFiles} pendingAiVideoImages={pendingAiVideoImages} imageProviderOptions={IMAGE_PROVIDER_OPTIONS} composerRef={composerRef} aiImageInputRef={aiImageInputRef} aiFileInputRef={aiFileInputRef} aiVideoImageInputRef={aiVideoImageInputRef} mediaEnabled={authStatus === 'authenticated' && Boolean(user)} onRequireLogin={onRequireLogin} onInputChange={setInput} onSendMessage={() => void handleSendMessage()} onToggleImageProviderMenu={() => { setShowMoreActions(false); setShowImageProviderMenu(value => !value); }} onSelectImageProvider={provider => { setSelectedImageProvider(provider); setIsImageGenerationMode(true); setIsVideoGenerationMode(false); setShowImageProviderMenu(false); }} onToggleImageGenerationMode={() => { setIsImageGenerationMode(value => !value); setIsVideoGenerationMode(false); setPendingAiVideoImages([]); }} onToggleVideoGenerationMode={() => { if (!isStreaming) { setIsVideoGenerationMode(value => !value); setIsImageGenerationMode(false); setPendingAiImages([]); setPendingAiFiles([]); } }} onRemovePendingAiImage={index => setPendingAiImages(images => images.filter((_, i) => i !== index))} onRemovePendingAiFile={index => setPendingAiFiles(files => files.filter((_, i) => i !== index))} onRemovePendingAiVideoImage={index => setPendingAiVideoImages(images => images.filter((_, i) => i !== index))} onPickAiImages={event => { const files = Array.from(event.target.files || []); event.target.value = ''; void handleAddAiImages(files); }} onPickAiFiles={event => { const files = Array.from(event.target.files || []); event.target.value = ''; void handleAddAiFiles(files); }} onPickAiVideoImages={event => { const files = Array.from(event.target.files || []); event.target.value = ''; void handleAddAiVideoImages(files); }} onDropFiles={files => void handleDropFiles(files)} onCancelVoiceRecorder={() => void cancelPressVoiceInput().then(() => setShowVoiceRecorder(false))} onStartPressVoiceInput={handleStartPressVoiceInput} onStopPressVoiceInput={() => void handleStopPressVoiceInput()} onOpenMoreActions={() => { setShowImageProviderMenu(false); setShowMoreActions(value => !value); }} onOpenAiImagePicker={() => aiImageInputRef.current?.click()} onOpenAiFilePicker={() => aiFileInputRef.current?.click()} onOpenAiVideoImagePicker={() => aiVideoImageInputRef.current?.click()} onOpenVoiceRecorder={() => { void cancelPressVoiceInput(); setShowVoiceRecorder(true); }} />
   </div>;
 }

@@ -1,31 +1,44 @@
-export async function fetchWithSingleRetry(
-  request: () => Promise<Response>,
-  userMessage: string,
-): Promise<Response> {
-  try {
-    return await request();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : '';
-    if (!/fetch failed|failed to fetch|networkerror/i.test(message)) {
-      throw error;
-    }
+type SessionExpiredListener = () => void;
 
-    await new Promise(resolve => setTimeout(resolve, 350));
+const sessionExpiredListeners = new Set<SessionExpiredListener>();
 
-    try {
-      return await request();
-    } catch (retryError) {
-      const retryMessage = retryError instanceof Error ? retryError.message : '';
-      if (/fetch failed|failed to fetch|networkerror/i.test(retryMessage)) {
-        throw new Error(userMessage);
-      }
+export class HttpError extends Error {
+  readonly status: number;
 
-      throw retryError;
-    }
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'HttpError';
+    this.status = status;
+  }
+}
+
+export function createHttpError(response: Pick<Response, 'status'>, message: string): HttpError {
+  return new HttpError(message, response.status);
+}
+
+export function isUnauthorizedError(error: unknown): error is Error & { status: 401 } {
+  return error instanceof Error
+    && 'status' in error
+    && error.status === 401;
+}
+
+export function subscribeToSessionExpired(listener: SessionExpiredListener): () => void {
+  sessionExpiredListeners.add(listener);
+  return () => sessionExpiredListeners.delete(listener);
+}
+
+export function notifySessionExpired(): void {
+  sessionExpiredListeners.forEach(listener => listener());
+}
+
+export function reportSessionExpiredResponse(response: Response): void {
+  if (response.status === 401) {
+    notifySessionExpired();
   }
 }
 
 export async function readJsonResult(response: Response): Promise<any> {
+  reportSessionExpiredResponse(response);
   try {
     return await response.json();
   } catch {

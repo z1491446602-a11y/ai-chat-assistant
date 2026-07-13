@@ -1,4 +1,5 @@
 import path from 'path';
+import { isIP } from 'node:net';
 
 function readPositiveInteger(name, defaultValue) {
   const rawValue = process.env[name];
@@ -16,11 +17,148 @@ function readPositiveInteger(name, defaultValue) {
   return value;
 }
 
+function readBoolean(name, defaultValue) {
+  const rawValue = process.env[name];
+  if (rawValue === undefined || rawValue.trim() === '') {
+    return defaultValue;
+  }
+  if (rawValue === 'true') return true;
+  if (rawValue === 'false') return false;
+  throw new Error(`${name} must be true or false`);
+}
+
+function readRedeemCodeHmacSecret() {
+  const value = typeof process.env.REDEEM_CODE_HMAC_SECRET === 'string'
+    ? process.env.REDEEM_CODE_HMAC_SECRET
+    : '';
+  if (!value && process.env.NODE_ENV === 'production') {
+    throw new Error('REDEEM_CODE_HMAC_SECRET is required in production');
+  }
+  if (value && Buffer.byteLength(value, 'utf8') < 32) {
+    throw new Error('REDEEM_CODE_HMAC_SECRET must contain at least 32 bytes');
+  }
+  return value;
+}
+
+function isPrivateUpstreamHostname(hostname) {
+  const normalized = String(hostname || '')
+    .toLowerCase()
+    .replace(/^\[|\]$/gu, '')
+    .replace(/\.$/u, '');
+  if (normalized === 'localhost' || normalized.endsWith('.localhost')) return true;
+
+  const ipVersion = isIP(normalized);
+  if (ipVersion === 4) {
+    const [first, second] = normalized.split('.').map(Number);
+    return (
+      first === 10
+      || first === 127
+      || (first === 172 && second >= 16 && second <= 31)
+      || (first === 192 && second === 168)
+    );
+  }
+  if (ipVersion === 6) {
+    if (normalized === '::1') return true;
+    if (normalized.startsWith('::ffff:')) return false;
+    return /^(?:fc|fd)/u.test(normalized);
+  }
+  return false;
+}
+
+function readRawAuthorityHostname(value) {
+  const authorityMatch = String(value || '')
+    .trim()
+    .match(/^[a-z][a-z\d+.-]*:\/\/([^/?#]*)/iu);
+  if (!authorityMatch) return null;
+
+  const authority = authorityMatch[1];
+  if (authority.startsWith('[')) {
+    const ipv6Match = authority.match(/^\[([^\]]+)\](?::\d+)?$/u);
+    return ipv6Match ? { hostname: ipv6Match[1], bracketed: true } : null;
+  }
+
+  const hostnameMatch = authority.match(/^([^:@]+)(?::\d+)?$/u);
+  return hostnameMatch ? { hostname: hostnameMatch[1], bracketed: false } : null;
+}
+
+function isCanonicalIpv4Literal(value) {
+  const parts = value.split('.');
+  return parts.length === 4 && parts.every(part => (
+    /^(?:0|[1-9]\d{0,2})$/u.test(part) && Number(part) <= 255
+  ));
+}
+
+function isStrictPrivateHttpUrl(value, parsed) {
+  const rawHostname = readRawAuthorityHostname(value);
+  if (!rawHostname) return false;
+
+  const normalizedRaw = rawHostname.hostname.toLowerCase();
+  const normalizedParsed = String(parsed.hostname || '')
+    .toLowerCase()
+    .replace(/^\[|\]$/gu, '');
+  if (normalizedRaw !== normalizedParsed) return false;
+
+  const ipVersion = isIP(normalizedParsed);
+  if (ipVersion === 4) {
+    return !rawHostname.bracketed
+      && isCanonicalIpv4Literal(normalizedRaw)
+      && isPrivateUpstreamHostname(normalizedParsed);
+  }
+  if (ipVersion === 6) {
+    return rawHostname.bracketed
+      && !normalizedParsed.startsWith('::ffff:')
+      && isPrivateUpstreamHostname(normalizedParsed);
+  }
+  return !rawHostname.bracketed && (
+    normalizedParsed === 'localhost' || normalizedParsed.endsWith('.localhost')
+  );
+}
+
+function isSecureUpstreamUrl(value) {
+  let parsed;
+  try {
+    parsed = new URL(String(value || '').trim());
+  } catch {
+    return false;
+  }
+
+  if (parsed.username || parsed.password) return false;
+  if (parsed.protocol === 'https:') return true;
+  return parsed.protocol === 'http:' && isStrictPrivateHttpUrl(value, parsed);
+}
+
+function validateUpstreamUrls(config) {
+  const upstreamUrls = [
+    ['CHAT_API_URL', config.DEFAULT_CHAT_API_URL],
+    ['VIDEO_API_URL', config.VIDEO_API_URL],
+    ['DEEPSEEK_VOICE_CHAT_API_URL', config.DEEPSEEK_VOICE_CHAT_API_URL],
+    ['MIMO_CHAT_API_URL', config.MIMO_CHAT_API_URL],
+    ['IMAGE_API_URL', config.DEFAULT_IMAGE_API_URL],
+    ['IMAGE_GPT_GENERATION_URL', config.IMAGE_GPT_GENERATION_URL],
+    ['IMAGE_GPT_EDIT_URL', config.IMAGE_GPT_EDIT_URL],
+    ['IMAGE_GROK_GENERATION_URL', config.IMAGE_GROK_GENERATION_URL],
+    ['IMAGE_GROK_EDIT_URL', config.IMAGE_GROK_EDIT_URL],
+    ['BOCHA_WEB_SEARCH_API_URL', config.BOCHA_WEB_SEARCH_API_URL],
+    ['BAIDU_SPEECH_TOKEN_URL', config.BAIDU_SPEECH_TOKEN_URL],
+    ['BAIDU_SPEECH_ASR_URL', config.BAIDU_SPEECH_ASR_URL],
+  ];
+  const invalidNames = upstreamUrls
+    .filter(([, url]) => typeof url === 'string' && url.trim())
+    .filter(([, url]) => !isSecureUpstreamUrl(url))
+    .map(([name]) => name);
+
+  if (invalidNames.length) {
+    throw new Error(
+      `${invalidNames.join(', ')} must use HTTPS without embedded credentials; HTTP is allowed only for canonical loopback or private addresses`,
+    );
+  }
+}
+
 export function createServerConfig(rootDir) {
   const storageDir = process.env.STORAGE_DIR || path.join(rootDir, 'storage');
   const dataDir = process.env.DATA_DIR || storageDir;
   const dataFile = process.env.DATA_FILE || path.join(dataDir, 'data.json');
-  const legacyImageApiUrl = process.env.IMAGE_API_URL || 'http://tuluo.top:8000';
+  const legacyImageApiUrl = process.env.IMAGE_API_URL || '';
   const legacyImageApiKey = process.env.IMAGE_API_KEY || '';
   const legacyImageModel = process.env.IMAGE_API_MODEL || 'gpt-image-2';
   const videoAllowedHosts = (process.env.VIDEO_DOWNLOAD_HOSTS || process.env.VIDEO_ALLOWED_HOSTS || 'opcbucket.oss-cn-beijing.aliyuncs.com')
@@ -30,8 +168,20 @@ export function createServerConfig(rootDir) {
   const voicecloneDir = path.join(storageDir, 'voiceclone');
   const voiceReplySystemPrompt = process.env.VOICE_REPLY_SYSTEM_PROMPT || '你现在要为语音朗读生成最终回复文本。目标是让下游语音读出来像真人当下自然回应。直接输出最终答复，不要输出思考过程，不要使用 Markdown、标题、列表、代码块、表格、公式标记，也不要输出 #、*、**、LaTeX 这类符号。请使用日常口语，不要书面腔，不要像客服话术。根据用户语境自然匹配语气：安慰时温和，开心时轻快，解释时耐心清楚，暧昧或亲近语境时自然一点，但不要油腻、不要夸张。可以少量使用“嗯”“好呀”“其实”“我觉得”这类口语连接词，但仅在合适时使用，不要每句都带。避免连续感叹号、重复笑声、拟声词堆砌和过多语气词。优先控制在 1 到 3 句、120 字以内；只有用户明确要求详细解释时再适度展开。';
 
-  return {
+  const config = {
     PORT: Number(process.env.PORT || 3000),
+    AUTH_COOKIE_NAME: process.env.AUTH_COOKIE_NAME?.trim() || 'chat_auth',
+    AUTH_COOKIE_SECURE: readBoolean(
+      'AUTH_COOKIE_SECURE',
+      process.env.NODE_ENV === 'production',
+    ),
+    AUTH_SESSION_TTL_MS: readPositiveInteger('AUTH_SESSION_TTL_MS', 2_592_000_000),
+    AUTH_RATE_LIMIT_WINDOW_MS: readPositiveInteger('AUTH_RATE_LIMIT_WINDOW_MS', 900_000),
+    AUTH_RATE_LIMIT_MAX: readPositiveInteger('AUTH_RATE_LIMIT_MAX', 10),
+    ADMIN_PHONE: process.env.ADMIN_PHONE?.trim() || '',
+    ADMIN_BOOTSTRAP_PASSWORD: process.env.ADMIN_BOOTSTRAP_PASSWORD || '',
+    ADMIN_REAL_NAME: process.env.ADMIN_REAL_NAME?.trim() || '',
+    REDEEM_CODE_HMAC_SECRET: readRedeemCodeHmacSecret(),
     STORAGE_DIR: storageDir,
     DATA_DIR: dataDir,
     DATA_FILE: dataFile,
@@ -47,6 +197,12 @@ export function createServerConfig(rootDir) {
     VIDEO_ALLOWED_HOSTS: videoAllowedHosts,
     VIDEO_DOWNLOAD_HOSTS: videoAllowedHosts,
     FFPROBE_PATH: process.env.FFPROBE_PATH || 'ffprobe',
+    MEDIA_TASK_MAX_CONCURRENCY: readPositiveInteger('MEDIA_TASK_MAX_CONCURRENCY', 4),
+    IMAGE_TASK_MAX_CONCURRENCY: readPositiveInteger('IMAGE_TASK_MAX_CONCURRENCY', 3),
+    VIDEO_TASK_MAX_CONCURRENCY: readPositiveInteger('VIDEO_TASK_MAX_CONCURRENCY', 1),
+    MEDIA_TASK_MAX_QUEUE: readPositiveInteger('MEDIA_TASK_MAX_QUEUE', 24),
+    MEDIA_TASK_MAX_QUEUED_PER_OWNER: readPositiveInteger('MEDIA_TASK_MAX_QUEUED_PER_OWNER', 2),
+    AI_TASK_RETENTION_MS: readPositiveInteger('AI_TASK_RETENTION_MS', 1_800_000),
     AUDIO_DIR: process.env.AUDIO_DIR || path.join(storageDir, 'audios'),
     LEGACY_AUDIO_DIR: process.env.LEGACY_AUDIO_DIR || path.join(rootDir, 'public', 'audios'),
     VOICECLONE_DIR: voicecloneDir,
@@ -75,8 +231,8 @@ export function createServerConfig(rootDir) {
     IMAGE_GPT_EDIT_URL: process.env.IMAGE_GPT_EDIT_URL || 'https://api.chancexj.com/v1/images/edits',
     IMAGE_GPT_API_KEY: process.env.IMAGE_GPT_API_KEY || (legacyImageModel === 'gpt-image-2' ? legacyImageApiKey : ''),
     IMAGE_GPT_MODEL: process.env.IMAGE_GPT_MODEL || 'gpt-image-2',
-    IMAGE_GROK_GENERATION_URL: process.env.IMAGE_GROK_GENERATION_URL || 'http://tuluo.top:8000/v1/images/generations',
-    IMAGE_GROK_EDIT_URL: process.env.IMAGE_GROK_EDIT_URL || 'http://tuluo.top:8000/v1/images/edits',
+    IMAGE_GROK_GENERATION_URL: process.env.IMAGE_GROK_GENERATION_URL || '',
+    IMAGE_GROK_EDIT_URL: process.env.IMAGE_GROK_EDIT_URL || '',
     IMAGE_GROK_API_KEY: process.env.IMAGE_GROK_API_KEY || (legacyImageModel === 'grok-imagine-image-quality' ? legacyImageApiKey : ''),
     IMAGE_GROK_MODEL: process.env.IMAGE_GROK_MODEL || 'grok-imagine-image-quality',
     DEFAULT_ENABLE_WEB_SEARCH: process.env.CHAT_ENABLE_WEB_SEARCH !== 'false',
@@ -129,4 +285,6 @@ export function createServerConfig(rootDir) {
       '.mov',
     ]),
   };
+  validateUpstreamUrls(config);
+  return config;
 }

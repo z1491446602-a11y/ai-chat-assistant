@@ -35,7 +35,10 @@ describe('VideoMessage', () => {
     const video = container.querySelector('video');
     const source = container.querySelector('source');
     const download = screen.getByRole('link', { name: '下载视频' });
+    const surface = download.closest('.overflow-hidden');
 
+    expect(surface?.className).toContain('min-w-0');
+    expect(surface?.className).toContain('max-w-full');
     expect(video?.controls).toBe(true);
     expect(video?.getAttribute('playsinline')).not.toBeNull();
     expect(video?.preload).toBe('metadata');

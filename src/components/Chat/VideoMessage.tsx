@@ -38,7 +38,7 @@ export function VideoMessage({ message }: VideoMessageProps) {
     ].filter(Boolean).join(' · ');
 
     return (
-      <div className="overflow-hidden rounded-lg border border-sky-100 bg-white shadow-sm">
+      <div className="min-w-0 max-w-full overflow-hidden rounded-lg border border-sky-100 bg-white shadow-sm">
         <div className="aspect-video w-full bg-black">
           <video className="h-full w-full object-contain" controls playsInline preload="metadata">
             <source src={message.videoUrl} type={message.videoMimeType || 'video/mp4'} />
@@ -61,7 +61,7 @@ export function VideoMessage({ message }: VideoMessageProps) {
 
   const elapsedSeconds = Math.max(0, Math.floor((now - message.timestamp) / 1000));
   return (
-    <div className="max-w-[24rem] rounded-lg border border-sky-100 bg-white px-4 py-3.5 shadow-sm" role="status">
+    <div className="w-full min-w-0 max-w-[24rem] rounded-lg border border-sky-100 bg-white px-4 py-3.5 shadow-sm" role="status">
       <div className="flex items-center gap-3">
         <LoaderCircle className="h-5 w-5 shrink-0 animate-spin text-sky-600" />
         <div className="min-w-0">

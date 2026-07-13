@@ -15,9 +15,27 @@ import {
 } from '@/services/api';
 import type { Session } from '@/types';
 import { getAiOwner } from '@/utils/aiOwner';
+import {
+  adminResetPassword,
+  fetchCurrentUser,
+  generateRedeemCode,
+  login as loginAccount,
+  logout as logoutAccount,
+  redeemCode as redeemAccountCode,
+  register as registerAccount,
+  type AuthStatus,
+  type AuthUser,
+  type AdminResetPasswordInput,
+  type LoginInput,
+  type RegisterInput,
+} from '@/services/authApi';
+import { notifySessionExpired, subscribeToSessionExpired } from '@/services/http';
 
 const AiChat = lazy(() =>
   import('@/components/AiChat/AiChat').then((module) => ({ default: module.AiChat })),
+);
+const AccountDialog = lazy(() =>
+  import('@/components/Auth/AccountDialog').then((module) => ({ default: module.AccountDialog })),
 );
 
 function AiSurfaceLoading() {
@@ -114,6 +132,7 @@ function formatSessionTime(timestamp: number) {
 
 function AppSidebar({
   open,
+  interactionEnabled,
   aiSessions,
   currentAiSessionId,
   onClose,
@@ -124,6 +143,7 @@ function AppSidebar({
   onClearLocalCache,
 }: {
   open: boolean;
+  interactionEnabled: boolean;
   aiSessions: Session[];
   currentAiSessionId: string | null;
   onClose: () => void;
@@ -166,7 +186,8 @@ function AppSidebar({
 
             <button
               onClick={onCreateAiSession}
-              className="tech-hover-float mt-4 flex w-full items-center justify-between rounded-2xl border border-sky-100/80 bg-[linear-gradient(180deg,#fbfdff_0%,#edf6ff_100%)] px-4 py-3 text-left transition-colors hover:bg-[#e6f2ff]"
+              disabled={!interactionEnabled}
+              className="tech-hover-float mt-4 flex w-full items-center justify-between rounded-2xl border border-sky-100/80 bg-[linear-gradient(180deg,#fbfdff_0%,#edf6ff_100%)] px-4 py-3 text-left transition-colors hover:bg-[#e6f2ff] disabled:cursor-not-allowed disabled:opacity-50"
             >
               <span className="flex items-center gap-3">
                 <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-sky-100 bg-white shadow-sm">
@@ -191,7 +212,8 @@ function AppSidebar({
                   <button
                     type="button"
                     onClick={onClearAiSessions}
-                    className="rounded-full px-2 py-1 text-[11px] text-red-500 transition-colors hover:bg-red-50"
+                    disabled={!interactionEnabled}
+                    className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-full px-2 py-1 text-[11px] text-red-500 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     清空
                   </button>
@@ -243,7 +265,8 @@ function AppSidebar({
                       <button
                         type="button"
                         onClick={() => onDeleteAiSession(session.id)}
-                        className="flex w-10 shrink-0 items-center justify-center rounded-2xl border border-transparent text-slate-300 transition-colors hover:border-red-100 hover:bg-red-50 hover:text-red-500"
+                        disabled={!interactionEnabled}
+                        className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-2xl border border-transparent text-slate-300 transition-colors hover:border-red-100 hover:bg-red-50 hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-50"
                         aria-label="删除这条聊天记录"
                         title="删除"
                       >
@@ -262,7 +285,8 @@ function AppSidebar({
           <button
             type="button"
             onClick={onClearLocalCache}
-            className="tech-hover-float flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-slate-500 transition-colors hover:bg-sky-50 hover:text-sky-700"
+            disabled={!interactionEnabled}
+            className="tech-hover-float flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-slate-500 transition-colors hover:bg-sky-50 hover:text-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <DatabaseZap className="h-5 w-5" />
             <span className="min-w-0 flex-1">
@@ -293,8 +317,76 @@ export function App() {
   const resetSessions = useChatStore((state) => state.resetSessions);
 
   const [showMenu, setShowMenu] = useState(false);
-  const aiOwner = useMemo(() => getAiOwner(), []);
+  const [accountDialogOpen, setAccountDialogOpen] = useState(false);
+  const [accountBusy, setAccountBusy] = useState(false);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authStatus, setAuthStatus] = useState<AuthStatus>('loading');
+  const guestOwner = useMemo(() => getAiOwner(), []);
+  const aiOwner = useMemo(
+    () => authUser ? { userId: authUser.id } as const : guestOwner,
+    [authUser, guestOwner],
+  );
   const requestGenerationRef = useRef(0);
+  const accountGenerationRef = useRef(0);
+  const authUserIdRef = useRef<string | null>(null);
+  const accountRefreshRef = useRef<{
+    generation: number;
+    expectedUserId: string | null;
+    promise: Promise<boolean>;
+  } | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      accountGenerationRef.current += 1;
+      accountRefreshRef.current = null;
+    };
+  }, []);
+
+  const switchAccount = useCallback((nextUser: AuthUser | null) => {
+    if (!mountedRef.current) {
+      return;
+    }
+    accountGenerationRef.current += 1;
+    accountRefreshRef.current = null;
+    authUserIdRef.current = nextUser?.id || null;
+    requestGenerationRef.current += 1;
+    resetSessions();
+    setAuthUser(nextUser);
+    setAuthStatus(nextUser ? 'authenticated' : 'guest');
+  }, [resetSessions]);
+
+  useEffect(() => subscribeToSessionExpired(() => {
+    switchAccount(null);
+    setAccountDialogOpen(true);
+  }), [switchAccount]);
+
+  useEffect(() => {
+    let active = true;
+    const accountGeneration = accountGenerationRef.current;
+    void fetchCurrentUser()
+      .then((user) => {
+        if (active && accountGeneration === accountGenerationRef.current) {
+          authUserIdRef.current = user?.id || null;
+          setAuthUser(user);
+          setAuthStatus(user ? 'authenticated' : 'guest');
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to load current account', error);
+        if (active && accountGeneration === accountGenerationRef.current) {
+          setAuthStatus('error');
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const interactionEnabled = authStatus === 'authenticated' || authStatus === 'guest';
 
   const aiSessions = useMemo(
     () =>
@@ -333,6 +425,10 @@ export function App() {
   }, [aiOwner, setSessions]);
 
   useEffect(() => {
+    if (!interactionEnabled) {
+      return undefined;
+    }
+
     const syncAiSessions = async () => {
       if (useChatStore.getState().isStreaming) {
         return;
@@ -368,9 +464,156 @@ export function App() {
       window.clearInterval(timer);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [refreshAiSessions]);
+  }, [interactionEnabled, refreshAiSessions]);
+
+  const runAccountAction = useCallback(async <T,>(action: () => Promise<T>) => {
+    setAccountBusy(true);
+    try {
+      return await action();
+    } finally {
+      setAccountBusy(false);
+    }
+  }, []);
+
+  const handleLogin = useCallback(async (input: LoginInput) => {
+    const user = await runAccountAction(() => loginAccount(input));
+    switchAccount(user);
+    setAccountDialogOpen(false);
+  }, [runAccountAction, switchAccount]);
+
+  const handleRegister = useCallback(async (input: RegisterInput) => {
+    const user = await runAccountAction(() => registerAccount(input));
+    switchAccount(user);
+    setAccountDialogOpen(false);
+  }, [runAccountAction, switchAccount]);
+
+  const handleLogout = useCallback(async () => {
+    await runAccountAction(logoutAccount);
+    switchAccount(null);
+    setAccountDialogOpen(false);
+  }, [runAccountAction, switchAccount]);
+
+  const handleRedeem = useCallback(async (code: string) => {
+    const user = await runAccountAction(() => redeemAccountCode(code));
+    accountGenerationRef.current += 1;
+    accountRefreshRef.current = null;
+    authUserIdRef.current = user.id;
+    setAuthUser(user);
+  }, [runAccountAction]);
+
+  const handleGenerateCode = useCallback((points: number) => (
+    runAccountAction(() => generateRedeemCode(points))
+  ), [runAccountAction]);
+
+  const handleAdminResetPassword = useCallback(async (input: AdminResetPasswordInput) => {
+    const result = await runAccountAction(() => adminResetPassword(
+      input.phone,
+      input.realName,
+      input.newPassword,
+    ));
+    if (result.user.id === authUser?.id) {
+      notifySessionExpired();
+    }
+  }, [authUser?.id, runAccountAction]);
+
+  const refreshAccount = useCallback((
+    options: { forceAfterCurrent?: boolean } = {},
+  ): Promise<boolean> => {
+    const generation = accountGenerationRef.current;
+    const expectedUserId = authUserIdRef.current;
+    const isCurrentAccount = () => (
+      mountedRef.current
+      && generation === accountGenerationRef.current
+      && expectedUserId === authUserIdRef.current
+    );
+    const beginRefresh = (): Promise<boolean> => {
+      const promise = (async () => {
+        try {
+          const user = await fetchCurrentUser({ reportUnauthorized: true });
+          if (!isCurrentAccount()) {
+            return false;
+          }
+
+          if (user) {
+            if (expectedUserId && user.id !== expectedUserId) {
+              return false;
+            }
+            if (!expectedUserId) {
+              switchAccount(user);
+            } else {
+              authUserIdRef.current = user.id;
+              setAuthUser(user);
+              setAuthStatus('authenticated');
+            }
+          } else if (expectedUserId) {
+            switchAccount(null);
+          } else {
+            setAuthUser(null);
+            setAuthStatus('guest');
+          }
+          return true;
+        } catch (error) {
+          if (mountedRef.current) {
+            console.error('Failed to refresh account balance', error);
+          }
+          return false;
+        }
+      })();
+      const refresh = { generation, expectedUserId, promise };
+      accountRefreshRef.current = refresh;
+      void promise.finally(() => {
+        if (accountRefreshRef.current === refresh) {
+          accountRefreshRef.current = null;
+        }
+      });
+      return promise;
+    };
+
+    if (!mountedRef.current) {
+      return Promise.resolve(false);
+    }
+
+    const activeRefresh = accountRefreshRef.current;
+    if (
+      activeRefresh
+      && activeRefresh.generation === generation
+      && activeRefresh.expectedUserId === expectedUserId
+    ) {
+      if (!options.forceAfterCurrent) {
+        return activeRefresh.promise;
+      }
+
+      return activeRefresh.promise.then(() => {
+        if (!isCurrentAccount()) {
+          return false;
+        }
+        const queuedRefresh = accountRefreshRef.current;
+        if (
+          queuedRefresh
+          && queuedRefresh.generation === generation
+          && queuedRefresh.expectedUserId === expectedUserId
+        ) {
+          return queuedRefresh.promise;
+        }
+        return beginRefresh();
+      });
+    }
+
+    return beginRefresh();
+  }, [switchAccount]);
+
+  const handleOpenAccountDialog = useCallback(() => {
+    setAccountDialogOpen(true);
+    if (authStatus !== 'loading') {
+      void refreshAccount();
+    }
+  }, [authStatus, refreshAccount]);
 
   const handleCreateAiSession = () => {
+    if (!interactionEnabled) {
+      return;
+    }
+
     requestGenerationRef.current += 1;
     void (async () => {
       try {
@@ -390,6 +633,10 @@ export function App() {
   };
 
   const handleDeleteAiSession = (sessionId: string) => {
+    if (!interactionEnabled) {
+      return;
+    }
+
     if (!window.confirm('确定删除这条聊天记录吗？删除后云端也会移除。')) {
       return;
     }
@@ -407,7 +654,7 @@ export function App() {
   };
 
   const handleClearAiSessions = () => {
-    if (aiSessions.length === 0) {
+    if (!interactionEnabled || aiSessions.length === 0) {
       return;
     }
 
@@ -429,6 +676,10 @@ export function App() {
   };
 
   const handleClearLocalCache = () => {
+    if (!interactionEnabled) {
+      return;
+    }
+
     if (!window.confirm('确定清除本地缓存吗？云端聊天记录不会删除，刷新后会重新同步。')) {
       return;
     }
@@ -455,6 +706,7 @@ export function App() {
 
       <AppSidebar
         open={showMenu}
+        interactionEnabled={interactionEnabled}
         aiSessions={aiSessions}
         currentAiSessionId={currentSessionId}
         onClose={() => setShowMenu(false)}
@@ -469,11 +721,34 @@ export function App() {
         <Suspense fallback={<AiSurfaceLoading />}>
           <AiChat
             aiOwner={aiOwner}
+            authStatus={authStatus}
+            interactionEnabled={interactionEnabled}
+            user={authUser}
             sidebarOpen={showMenu}
             refreshAiSessions={refreshAiSessions}
+            onRequireLogin={handleOpenAccountDialog}
+            onAccountClick={handleOpenAccountDialog}
+            onMediaTaskSettled={refreshAccount}
           />
         </Suspense>
       </div>
+
+      {accountDialogOpen && (
+        <Suspense fallback={null}>
+          <AccountDialog
+            open
+            user={authUser}
+            busy={accountBusy}
+            onClose={() => setAccountDialogOpen(false)}
+            onLogin={handleLogin}
+            onRegister={handleRegister}
+            onLogout={handleLogout}
+            onRedeem={handleRedeem}
+            onGenerateCode={handleGenerateCode}
+            onResetPassword={handleAdminResetPassword}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

@@ -7,13 +7,24 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { buildFileContextBlocks } from './fileAttachmentTools.js';
 import { createAiProviders } from './server/aiProviders.js';
-import { createAiTaskStore } from './server/aiTasks.js';
+import {
+  createAiTaskStore,
+  createChatTaskScheduler,
+  reconcileMediaRequestOrphans,
+} from './server/aiTasks.js';
+import { privateApiNoStore, registerAuthRoutes } from './server/authRoutes.js';
+import { createAuthService } from './server/authService.js';
+import { createMediaTaskScheduler } from './server/mediaTaskScheduler.js';
+import { createMediaRequestService } from './server/mediaRequestService.js';
+import { createImageReferenceResolver } from './server/imageReferences.js';
 import { createAiSessionStore } from './server/aiSessions.js';
 import { createAudioFileStore, getAudioMimeTypeFromPath, normalizeVoiceAudioBuffer } from './server/audioFiles.js';
 import { createServerConfig } from './server/config.js';
+import { applySameOriginCorsPolicy } from './server/corsPolicy.js';
 import { registerDailySuggestionsRoute } from './server/dailySuggestions.js';
 import { loadEnvFile } from './server/env.js';
 import { createUpstreamFetch } from './server/httpClient.js';
+import { registerTerminalErrorHandler } from './server/httpErrors.js';
 import { registerAiRoutes } from './server/aiRoutes.js';
 import { createDataStore } from './server/storage.js';
 import {
@@ -29,6 +40,7 @@ import {
   registerUploadEndpoint,
 } from './server/uploadFiles.js';
 import { parseUpstreamErrorMessage } from './server/upstreamErrors.js';
+import { createPointsService } from './server/pointsService.js';
 import { createVideoProvider } from './server/videoProvider.js';
 import { createVideoFileStore } from './server/videoFiles.js';
 import { createVideoJobStore } from './server/videoJobs.js';
@@ -84,6 +96,21 @@ const {
   VIDEO_MAX_BYTES,
   VIDEO_DOWNLOAD_HOSTS,
   FFPROBE_PATH,
+  MEDIA_TASK_MAX_CONCURRENCY,
+  IMAGE_TASK_MAX_CONCURRENCY,
+  VIDEO_TASK_MAX_CONCURRENCY,
+  MEDIA_TASK_MAX_QUEUE,
+  MEDIA_TASK_MAX_QUEUED_PER_OWNER,
+  AI_TASK_RETENTION_MS,
+  AUTH_COOKIE_NAME,
+  AUTH_COOKIE_SECURE,
+  AUTH_SESSION_TTL_MS,
+  AUTH_RATE_LIMIT_WINDOW_MS,
+  AUTH_RATE_LIMIT_MAX,
+  ADMIN_PHONE,
+  ADMIN_BOOTSTRAP_PASSWORD,
+  ADMIN_REAL_NAME,
+  REDEEM_CODE_HMAC_SECRET,
   DEFAULT_ENABLE_WEB_SEARCH,
   BOCHA_WEB_SEARCH_API_URL,
   BOCHA_WEB_SEARCH_API_KEY,
@@ -116,6 +143,21 @@ const { loadData, saveData } = createDataStore({
   legacyDataFile: LEGACY_DATA_FILE,
 });
 const upstreamFetch = createUpstreamFetch();
+const resolveImageReferences = createImageReferenceResolver({ uploadDir: UPLOAD_DIR });
+const mediaTaskScheduler = createMediaTaskScheduler({
+  maxConcurrent: MEDIA_TASK_MAX_CONCURRENCY,
+  imageMaxConcurrent: IMAGE_TASK_MAX_CONCURRENCY,
+  videoMaxConcurrent: VIDEO_TASK_MAX_CONCURRENCY,
+  ownerMaxConcurrent: 1,
+  maxQueued: MEDIA_TASK_MAX_QUEUE,
+  maxQueuedPerOwner: MEDIA_TASK_MAX_QUEUED_PER_OWNER,
+});
+const chatTaskScheduler = createChatTaskScheduler({
+  maxConcurrent: 8,
+  maxQueued: 32,
+  ownerMaxConcurrent: 1,
+  maxQueuedPerOwner: 4,
+});
 const videoProvider = createVideoProvider({
   fetchImpl: upstreamFetch,
   apiUrl: VIDEO_API_URL,
@@ -208,9 +250,6 @@ const {
   buildResponsesInput,
   buildResponsesInstructions,
   buildChatCompletionsMessages,
-  buildCompatibleImagePrompt,
-  appendOptionalImageSize,
-  resolveGeneratedImages,
   streamResponse,
   performChatCompletion,
   performStreamingChatCompletion,
@@ -222,6 +261,28 @@ const {
 let data = loadData();
 if (!data.aiSessions || typeof data.aiSessions !== 'object' || Array.isArray(data.aiSessions)) {
   data.aiSessions = {};
+}
+const authService = createAuthService({
+  data,
+  saveData,
+  sessionTtlMs: AUTH_SESSION_TTL_MS,
+});
+const pointsService = createPointsService({
+  data,
+  saveData,
+  redeemCodeHmacSecret: REDEEM_CODE_HMAC_SECRET,
+});
+const mediaRequestService = createMediaRequestService({ data, saveData });
+authService.prune();
+if (ADMIN_PHONE || ADMIN_BOOTSTRAP_PASSWORD) {
+  if (!ADMIN_PHONE || !ADMIN_BOOTSTRAP_PASSWORD) {
+    throw new Error('ADMIN_PHONE and ADMIN_BOOTSTRAP_PASSWORD must be configured together');
+  }
+  await authService.ensureAdmin({
+    phone: ADMIN_PHONE,
+    password: ADMIN_BOOTSTRAP_PASSWORD,
+    realName: ADMIN_REAL_NAME || '管理员',
+  });
 }
 const videoJobStore = createVideoJobStore({ data, saveData });
 let getAiTaskFromStore = () => null;
@@ -260,6 +321,7 @@ const {
   registerAiTask,
   serializeAiTask,
   runAiTask,
+  cancelAiTask,
   resumeVideoJobs,
 } = createAiTaskStore({
   findAiSession: (...args) => findAiSession(...args),
@@ -281,10 +343,21 @@ const {
   VOICE_REPLY_TEMPERATURE,
   VOICE_REPLY_MAX_TOKENS,
   VOICE_REPLY_TOP_P,
+  mediaTaskScheduler,
+  chatTaskScheduler,
+  settleMediaTask: settlePersistedMediaTask,
+  terminalMediaRequest: (requestKey, status) => mediaRequestService.terminal(requestKey, status),
+  getMediaRequestKeyForTask: taskId => (
+    Object.values(data.mediaRequests || {})
+      .find(record => record?.taskId === taskId && record?.status === 'accepted')
+      ?.key || ''
+  ),
+  taskRetentionMs: AI_TASK_RETENTION_MS,
 });
 getAiTaskFromStore = getAiTask;
 
 app.set('trust proxy', 'loopback');
+app.use(privateApiNoStore);
 
 app.use((req, res, next) => {
   const isDocumentRequest = req.method === 'GET' || req.method === 'HEAD';
@@ -296,12 +369,26 @@ app.use((req, res, next) => {
   }
   next();
 });
-app.use(cors());
+applySameOriginCorsPolicy(app, cors, {
+  allowedOrigins: process.env.NODE_ENV === 'development'
+    ? ['http://localhost:3001', 'http://127.0.0.1:3001']
+    : [],
+});
 app.use(compression({ filter: createCompressionFilter(compression.filter) }));
 registerUploadEndpoint(app, {
   rateLimiter: uploadRateLimiter,
   jsonParser: express.json({ limit: '50mb' }),
   handler: uploadHandler,
+});
+registerAuthRoutes(app, {
+  authService,
+  pointsService,
+  cookieName: AUTH_COOKIE_NAME,
+  cookieSecure: AUTH_COOKIE_SECURE,
+  sessionTtlMs: AUTH_SESSION_TTL_MS,
+  rateLimitWindowMs: AUTH_RATE_LIMIT_WINDOW_MS,
+  rateLimitMax: AUTH_RATE_LIMIT_MAX,
+  jsonParser: express.json({ limit: '16kb' }),
 });
 app.use(express.json({ limit: '50mb' }));
 const distDir = path.join(__dirname, 'dist');
@@ -316,10 +403,44 @@ registerStaticResourceRoutes(app, {
 function normalizeUserId(userId) {
   return String(userId || '').trim();
 }
+
+function settlePersistedMediaTask(taskId, success) {
+  return data.pointReservations?.[taskId]
+    ? pointsService.settle(taskId, success)
+    : null;
+}
+
 videoFileStore.ensureVideoDir();
 const resumedVideoJobs = resumeVideoJobs();
+const reconciledMediaRequests = reconcileMediaRequestOrphans({
+  mediaRequestService,
+  activeTaskIds: resumedVideoJobs.activeTaskIds || [],
+  pointReservations: data.pointReservations,
+  getAiSessions,
+  findAiSession,
+  patchAiMessage,
+  clearAiSessionTask,
+  settleMediaTask: settlePersistedMediaTask,
+  videoJobStore,
+});
+const reconciledPointReservations = pointsService.reconcileReservations(
+  resumedVideoJobs.activeTaskIds || [],
+);
 if (resumedVideoJobs.recoveredCount || resumedVideoJobs.unknownSubmissionCount) {
   console.log('Video jobs recovery:', resumedVideoJobs);
+}
+if (reconciledPointReservations.length) {
+  console.log(`Reconciled ${reconciledPointReservations.length} point reservations`);
+}
+if (
+  reconciledMediaRequests.completedCount
+  || reconciledMediaRequests.failedCount
+  || reconciledMediaRequests.cancelledCount
+  || reconciledMediaRequests.abortedCount
+  || reconciledMediaRequests.terminalPendingClearedCount
+  || reconciledMediaRequests.errors.length
+) {
+  console.log('Media request recovery:', reconciledMediaRequests);
 }
 
 function generateEntityId(prefix) {
@@ -379,6 +500,11 @@ registerAiRoutes(app, {
   registerAiTask,
   serializeAiTask,
   runAiTask,
+  cancelAiTask,
+  chatTaskScheduler,
+  resolveImageReferences,
+  pointsService,
+  mediaRequestService,
   videoJobStore,
   removeAiSession,
   removeAllAiSessions,
@@ -392,16 +518,11 @@ registerAiRoutes(app, {
   buildChatCompletionsMessages,
   buildChatCompletionsPayload,
   streamResponse,
-  appendOptionalImageSize,
-  buildCompatibleImagePrompt,
-  resolveGeneratedImages,
   performStreamingChatCompletion,
   DEFAULT_CHAT_API_KEY,
   DEFAULT_CHAT_MODEL,
   DEFAULT_ENABLE_WEB_SEARCH,
   VOICE_STREAMING_TEXT,
-  DEFAULT_IMAGE_API_URL,
-  DEFAULT_IMAGE_API_KEY,
   DEFAULT_IMAGE_MODEL,
   VIDEO_API_MODEL,
   BAIDU_SPEECH_API_KEY,
@@ -420,6 +541,7 @@ app.get('/api/health', (req, res) => {
 registerSpaFallback(app, {
   indexPath: path.join(distDir, 'index.html'),
 });
+registerTerminalErrorHandler(app);
 
 const server = createServer(app);
 server.keepAliveTimeout = 65000;

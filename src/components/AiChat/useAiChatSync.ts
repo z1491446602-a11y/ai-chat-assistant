@@ -1,10 +1,21 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { cancelServerAiTask, fetchServerAiTask } from '@/services/api';
+import { isUnauthorizedError } from '@/services/http';
 import type { Message, Session } from '@/types';
 import type { AiTaskOwner } from '@/services/api';
 
+const MEDIA_POINTS_CALIBRATION_DELAY_MS = 1_000;
+
+type MediaPointsCalibrationStatus = 'idle' | 'scheduled' | 'pending' | 'succeeded' | 'failed';
+
+interface MediaPointsCalibrationState {
+  immediate: MediaPointsCalibrationStatus;
+  delayed: MediaPointsCalibrationStatus;
+}
+
 interface UseAiChatSyncParams {
   aiOwner: AiTaskOwner;
+  interactionEnabled?: boolean;
   refreshAiSessions: (
     preferredSessionId?: string | null,
     shouldApply?: () => boolean,
@@ -14,33 +25,106 @@ interface UseAiChatSyncParams {
   patchMessage: (sessionId: string, messageId: string, patch: Partial<Message>) => void;
   setStreaming: (streaming: boolean, controller?: AbortController | null) => void;
   setStreamingMessageId: (id: string | undefined) => void;
+  onMediaTaskSettled?: (
+    options?: { forceAfterCurrent?: boolean },
+  ) => Promise<boolean> | boolean | void;
 }
 
 export function useAiChatSync({
   aiOwner,
+  interactionEnabled = true,
   refreshAiSessions,
   currentSessionId,
   currentAiSession,
   patchMessage,
   setStreaming,
   setStreamingMessageId,
+  onMediaTaskSettled,
 }: UseAiChatSyncParams) {
   const currentAiTaskIdRef = useRef<string | null>(null);
   const currentAiSessionIdRef = useRef<string | null>(null);
   const currentAiTaskTypeRef = useRef<'chat' | 'image' | 'video' | null>(null);
   const serverTaskPollTimerRef = useRef<number | null>(null);
-  const serverTaskPollInFlightRef = useRef(false);
   const serverTaskPollStartedAtRef = useRef<number | null>(null);
   const settledTaskIdRef = useRef<string | null>(null);
+  const mediaPointsCalibrationStatesRef = useRef(new Map<string, MediaPointsCalibrationState>());
+  const delayedPointsRefreshTimersRef = useRef(new Map<string, number>());
+  const pollGenerationRef = useRef(0);
+  const activePollGenerationRef = useRef<number | null>(null);
+  const inFlightGenerationRef = useRef<number | null>(null);
+
+  const runMediaPointsCalibration = useCallback((
+    taskId: string,
+    phase: 'immediate' | 'delayed',
+    state: MediaPointsCalibrationState,
+  ) => {
+    state[phase] = 'pending';
+    void (async () => {
+      try {
+        const refreshed = phase === 'delayed'
+          ? await onMediaTaskSettled?.({ forceAfterCurrent: true })
+          : await onMediaTaskSettled?.();
+        state[phase] = refreshed === false ? 'failed' : 'succeeded';
+      } catch (error) {
+        state[phase] = 'failed';
+        console.error(`Failed to calibrate account points for media task ${taskId}`, error);
+      }
+    })();
+  }, [onMediaTaskSettled]);
+
+  const calibrateMediaPoints = useCallback((
+    taskId: string,
+    taskType: 'chat' | 'image' | 'video' | null | undefined,
+  ) => {
+    if (
+      !onMediaTaskSettled
+      || (taskType !== 'image' && taskType !== 'video')
+    ) {
+      return;
+    }
+
+    let state = mediaPointsCalibrationStatesRef.current.get(taskId);
+    if (!state) {
+      state = { immediate: 'idle', delayed: 'idle' };
+      mediaPointsCalibrationStatesRef.current.set(taskId, state);
+    }
+    if (state.immediate === 'idle') {
+      runMediaPointsCalibration(taskId, 'immediate', state);
+    }
+    if (state.delayed !== 'idle') {
+      return;
+    }
+
+    state.delayed = 'scheduled';
+    const timerId = window.setTimeout(() => {
+      delayedPointsRefreshTimersRef.current.delete(taskId);
+      if (state?.delayed === 'scheduled') {
+        runMediaPointsCalibration(taskId, 'delayed', state);
+      }
+    }, MEDIA_POINTS_CALIBRATION_DELAY_MS);
+    delayedPointsRefreshTimersRef.current.set(taskId, timerId);
+  }, [onMediaTaskSettled, runMediaPointsCalibration]);
 
   const stopServerTaskPolling = useCallback(() => {
-    if (serverTaskPollTimerRef.current) {
+    pollGenerationRef.current += 1;
+    activePollGenerationRef.current = null;
+    if (serverTaskPollTimerRef.current !== null) {
       window.clearTimeout(serverTaskPollTimerRef.current);
       serverTaskPollTimerRef.current = null;
     }
-    serverTaskPollInFlightRef.current = false;
     serverTaskPollStartedAtRef.current = null;
   }, []);
+
+  const isActivePoll = useCallback((
+    taskId: string,
+    taskSessionId: string | null,
+    generation: number,
+  ) => (
+    interactionEnabled
+    && activePollGenerationRef.current === generation
+    && currentAiTaskIdRef.current === taskId
+    && currentAiSessionIdRef.current === taskSessionId
+  ), [interactionEnabled]);
 
   const getNextPollDelay = useCallback(() => {
     const startedAt = serverTaskPollStartedAtRef.current;
@@ -69,20 +153,28 @@ export function useAiChatSync({
 
   const syncServerAiSessions = refreshAiSessions;
 
-  const pollServerTask = useCallback(async (taskId: string, preferredSessionId?: string | null) => {
-    if (serverTaskPollInFlightRef.current) {
+  const pollServerTask = useCallback(async (
+    taskId: string,
+    taskSessionId: string | null,
+    generation: number,
+  ) => {
+    if (!isActivePoll(taskId, taskSessionId, generation)) {
       return;
     }
 
-    serverTaskPollInFlightRef.current = true;
+    if (inFlightGenerationRef.current === generation) {
+      return;
+    }
+
+    inFlightGenerationRef.current = generation;
     try {
       const task = await fetchServerAiTask(taskId, aiOwner);
-      if (currentAiTaskIdRef.current !== taskId) {
+      if (!isActivePoll(taskId, taskSessionId, generation)) {
         return;
       }
 
       currentAiTaskTypeRef.current = task.type;
-      const targetSessionId = preferredSessionId || task.sessionId;
+      const targetSessionId = taskSessionId || task.sessionId;
 
       const hasPartialContent = typeof task.content === 'string' && task.content.length > 0;
       const hasPartialImages = Array.isArray(task.images) && task.images.length > 0;
@@ -127,6 +219,7 @@ export function useAiChatSync({
       }
 
       if (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') {
+        calibrateMediaPoints(taskId, task.type);
         settledTaskIdRef.current = taskId;
         stopServerTaskPolling();
         setStreaming(false, null);
@@ -156,25 +249,43 @@ export function useAiChatSync({
         settledTaskIdRef.current = null;
       }
     } catch (error) {
-      if (currentAiTaskIdRef.current !== taskId) {
+      if (isUnauthorizedError(error)) {
+        if (
+          currentAiTaskIdRef.current !== taskId
+          || currentAiSessionIdRef.current !== taskSessionId
+        ) {
+          return;
+        }
+        stopServerTaskPolling();
+        setStreaming(false, null);
+        setStreamingMessageId(undefined);
+        currentAiTaskIdRef.current = null;
+        currentAiSessionIdRef.current = null;
+        currentAiTaskTypeRef.current = null;
+        settledTaskIdRef.current = null;
+        return;
+      }
+
+      if (!isActivePoll(taskId, taskSessionId, generation)) {
         return;
       }
 
       console.error('Failed to poll AI task', error);
       try {
         const sessions = await syncServerAiSessions(
-          preferredSessionId,
-          () => currentAiTaskIdRef.current === taskId,
+          taskSessionId,
+          () => isActivePoll(taskId, taskSessionId, generation),
         );
-        if (currentAiTaskIdRef.current !== taskId) {
+        if (!isActivePoll(taskId, taskSessionId, generation)) {
           return;
         }
 
-        const activeSession = preferredSessionId
-          ? sessions.find(session => session.id === preferredSessionId)
-          : sessions.find(session => session.id === currentSessionId);
+        const activeSession = taskSessionId
+          ? sessions.find(session => session.id === taskSessionId)
+          : undefined;
 
-        if (!activeSession?.pendingTaskId) {
+        if (taskSessionId && (!activeSession || activeSession.pendingTaskId !== taskId)) {
+          calibrateMediaPoints(taskId, currentAiTaskTypeRef.current);
           stopServerTaskPolling();
           setStreaming(false, null);
           setStreamingMessageId(undefined);
@@ -186,30 +297,53 @@ export function useAiChatSync({
         console.error('Failed to resync AI sessions after poll error', syncError);
       }
     } finally {
-      serverTaskPollInFlightRef.current = false;
+      if (inFlightGenerationRef.current === generation) {
+        inFlightGenerationRef.current = null;
+      }
     }
-  }, [aiOwner, currentSessionId, patchMessage, setStreaming, setStreamingMessageId, stopServerTaskPolling, syncServerAiSessions]);
+  }, [aiOwner, calibrateMediaPoints, isActivePoll, patchMessage, setStreaming, setStreamingMessageId, stopServerTaskPolling, syncServerAiSessions]);
 
   const startServerTaskPolling = useCallback((taskId: string, preferredSessionId?: string | null) => {
+    const taskSessionId = preferredSessionId || currentAiSessionIdRef.current;
+
+    stopServerTaskPolling();
+    settledTaskIdRef.current = null;
+    currentAiTaskIdRef.current = taskId;
+    currentAiSessionIdRef.current = taskSessionId;
+
+    if (!interactionEnabled) {
+      return;
+    }
+
+    const generation = ++pollGenerationRef.current;
+    activePollGenerationRef.current = generation;
+    serverTaskPollStartedAtRef.current = Date.now();
+
     const scheduleNextPoll = () => {
+      if (!isActivePoll(taskId, taskSessionId, generation)) {
+        return;
+      }
       serverTaskPollTimerRef.current = window.setTimeout(async () => {
-        await pollServerTask(taskId, preferredSessionId);
-        if (currentAiTaskIdRef.current === taskId && settledTaskIdRef.current !== taskId) {
+        serverTaskPollTimerRef.current = null;
+        await pollServerTask(taskId, taskSessionId, generation);
+        if (
+          isActivePoll(taskId, taskSessionId, generation)
+          && settledTaskIdRef.current !== taskId
+        ) {
           scheduleNextPoll();
         }
       }, getNextPollDelay());
     };
 
-    stopServerTaskPolling();
-    settledTaskIdRef.current = null;
-    currentAiTaskIdRef.current = taskId;
-    serverTaskPollStartedAtRef.current = Date.now();
-    void pollServerTask(taskId, preferredSessionId).finally(() => {
-      if (currentAiTaskIdRef.current === taskId && settledTaskIdRef.current !== taskId) {
+    void pollServerTask(taskId, taskSessionId, generation).finally(() => {
+      if (
+        isActivePoll(taskId, taskSessionId, generation)
+        && settledTaskIdRef.current !== taskId
+      ) {
         scheduleNextPoll();
       }
     });
-  }, [getNextPollDelay, pollServerTask, stopServerTaskPolling]);
+  }, [getNextPollDelay, interactionEnabled, isActivePoll, pollServerTask, stopServerTaskPolling]);
 
   const handleAbortAiResponse = useCallback(() => {
     const taskId = currentAiTaskIdRef.current;
@@ -222,12 +356,16 @@ export function useAiChatSync({
       }
       void (async () => {
         const lastSessionId = currentAiSessionIdRef.current;
+        const taskType = currentAiTaskTypeRef.current;
+        let cancelledTask;
         try {
-          await cancelServerAiTask(taskId, aiOwner);
+          cancelledTask = await cancelServerAiTask(taskId, aiOwner);
         } catch (error) {
           console.error('Failed to cancel AI task', error);
           return;
         }
+
+        calibrateMediaPoints(taskId, cancelledTask?.type || taskType);
 
         if (currentAiTaskIdRef.current !== taskId) {
           return;
@@ -263,18 +401,38 @@ export function useAiChatSync({
         settledTaskIdRef.current = null;
       })();
     }
-  }, [aiOwner, currentAiSession, currentAiSessionIdRef, setStreaming, setStreamingMessageId, stopServerTaskPolling, syncServerAiSessions]);
+  }, [aiOwner, calibrateMediaPoints, currentAiSession, currentAiSessionIdRef, setStreaming, setStreamingMessageId, stopServerTaskPolling, syncServerAiSessions]);
 
   useEffect(() => () => {
     stopServerTaskPolling();
+    delayedPointsRefreshTimersRef.current.forEach(timerId => window.clearTimeout(timerId));
+    delayedPointsRefreshTimersRef.current.clear();
+    mediaPointsCalibrationStatesRef.current.clear();
   }, [stopServerTaskPolling]);
 
   useEffect(() => {
+    if (!interactionEnabled) {
+      stopServerTaskPolling();
+      setStreaming(false, null);
+      setStreamingMessageId(undefined);
+      return;
+    }
+
     const pendingTaskId = currentAiSession?.pendingTaskId;
     if (!pendingTaskId) {
       if (currentAiTaskIdRef.current) {
+        const taskSessionId = currentAiSessionIdRef.current;
+        if (!currentAiSession || !taskSessionId || currentAiSession.id !== taskSessionId) {
+          stopServerTaskPolling();
+          setStreaming(false, null);
+          setStreamingMessageId(undefined);
+          return;
+        }
+
+        calibrateMediaPoints(currentAiTaskIdRef.current, currentAiTaskTypeRef.current);
         stopServerTaskPolling();
         currentAiTaskIdRef.current = null;
+        currentAiSessionIdRef.current = null;
         currentAiTaskTypeRef.current = null;
         settledTaskIdRef.current = null;
         setStreaming(false, null);
@@ -283,16 +441,30 @@ export function useAiChatSync({
       return;
     }
 
-    if (currentAiTaskIdRef.current === pendingTaskId) {
+    const pendingSessionId = currentAiSession?.id || currentSessionId;
+    const isSameTask = currentAiTaskIdRef.current === pendingTaskId
+      && currentAiSessionIdRef.current === pendingSessionId;
+    if (
+      isSameTask
+      && (
+        activePollGenerationRef.current !== null
+        || settledTaskIdRef.current === pendingTaskId
+      )
+    ) {
       return;
     }
 
-    currentAiSessionIdRef.current = currentAiSession?.id || null;
+    currentAiSessionIdRef.current = pendingSessionId;
     const pendingMessage = [...(currentAiSession?.messages || [])].reverse().find(message => message.status === 'streaming');
+    currentAiTaskTypeRef.current = pendingMessage?.videoGenerationStage
+      ? 'video'
+      : pendingMessage?.imageGenerationStage
+        ? 'image'
+        : currentAiTaskTypeRef.current;
     setStreaming(true, null);
     setStreamingMessageId(pendingMessage?.id);
-    startServerTaskPolling(pendingTaskId, currentAiSession?.id || null);
-  }, [currentAiSession, setStreaming, setStreamingMessageId, startServerTaskPolling, stopServerTaskPolling]);
+    startServerTaskPolling(pendingTaskId, pendingSessionId);
+  }, [calibrateMediaPoints, currentAiSession, currentSessionId, interactionEnabled, setStreaming, setStreamingMessageId, startServerTaskPolling, stopServerTaskPolling]);
 
   return {
     currentAiTaskIdRef,

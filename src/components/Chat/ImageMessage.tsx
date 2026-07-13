@@ -65,7 +65,7 @@ export function ImageMessage({ message }: ImageMessageProps) {
       : undefined;
 
     return (
-      <div className="overflow-hidden rounded-lg border border-sky-100 bg-white shadow-sm">
+      <div className="min-w-0 max-w-full overflow-hidden rounded-lg border border-sky-100 bg-white shadow-sm">
         <div className={`grid gap-px bg-sky-100 ${imageUrls.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
           {imageUrls.map((imageUrl, index) => (
             <a
@@ -108,7 +108,7 @@ export function ImageMessage({ message }: ImageMessageProps) {
 
   const elapsedSeconds = Math.max(0, Math.floor((now - message.timestamp) / 1000));
   return (
-    <div className="max-w-[24rem] rounded-lg border border-sky-100 bg-white px-4 py-3.5 shadow-sm" role="status">
+    <div className="w-full min-w-0 max-w-[24rem] rounded-lg border border-sky-100 bg-white px-4 py-3.5 shadow-sm" role="status">
       <div className="flex items-center gap-3">
         <LoaderCircle className="h-5 w-5 shrink-0 animate-spin text-sky-600" />
         <div className="min-w-0">

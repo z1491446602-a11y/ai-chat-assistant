@@ -1,5 +1,5 @@
 import type { APIConfig, MessageFile, Session } from '@/types';
-import { fetchWithSingleRetry, readJsonResult } from './http';
+import { createHttpError, readJsonResult } from './http';
 
 export type ImageGenerationProvider = 'gpt' | 'grok';
 
@@ -18,6 +18,7 @@ export interface ServerAiTask {
   audioMimeType?: string;
   duration?: number;
   progressPercent?: number;
+  queuePosition?: number;
   imageStage?: 'submitting' | 'generating' | 'receiving' | 'persisting';
   imageFileName?: string;
   imageFileSize?: number;
@@ -47,6 +48,86 @@ type NormalizedAiTaskOwner =
 
 const INVALID_AI_TASK_OWNER_ERROR =
   'Invalid AI task owner: provide exactly one non-empty userId or guestId';
+const INVALID_MEDIA_REQUEST_ID_ERROR =
+  'Invalid media requestId: provide a non-empty value with at most 128 characters';
+const CLIENT_REQUEST_ID_ERROR = '无法生成安全请求标识，请刷新页面后重试';
+
+export function createClientRequestId(): string {
+  try {
+    const cryptoApi = globalThis.crypto;
+    if (typeof cryptoApi?.randomUUID === 'function') {
+      return cryptoApi.randomUUID();
+    }
+    if (typeof cryptoApi?.getRandomValues !== 'function') {
+      throw new Error(CLIENT_REQUEST_ID_ERROR);
+    }
+
+    const bytes = cryptoApi.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  } catch {
+    throw new Error(CLIENT_REQUEST_ID_ERROR);
+  }
+}
+
+function normalizeMediaRequestId(requestId: string): string {
+  const normalized = typeof requestId === 'string' ? requestId.trim() : '';
+  if (!normalized || normalized.length > 128) {
+    throw new Error(INVALID_MEDIA_REQUEST_ID_ERROR);
+  }
+  return normalized;
+}
+
+function normalizeOrCreateMediaRequestId(requestId: string | undefined): string {
+  return requestId === undefined
+    ? createClientRequestId()
+    : normalizeMediaRequestId(requestId);
+}
+
+function isNetworkFetchError(error: unknown): boolean {
+  if (error instanceof TypeError) {
+    return true;
+  }
+  const message = error instanceof Error ? error.message : '';
+  return /fetch failed|failed to fetch|networkerror/i.test(message);
+}
+
+async function fetchWithLocalizedNetworkError(
+  path: string,
+  init: RequestInit | undefined,
+  fallbackMessage: string,
+): Promise<Response> {
+  try {
+    return init === undefined ? await fetch(path) : await fetch(path, init);
+  } catch {
+    throw new Error(fallbackMessage);
+  }
+}
+
+async function fetchPaidMediaTask(
+  path: string,
+  init: RequestInit,
+  fallbackMessage: string,
+): Promise<Response> {
+  try {
+    return await fetch(path, init);
+  } catch (firstError) {
+    if (!isNetworkFetchError(firstError)) {
+      throw firstError;
+    }
+  }
+
+  try {
+    return await fetch(path, init);
+  } catch (secondError) {
+    if (isNetworkFetchError(secondError)) {
+      throw new Error(fallbackMessage);
+    }
+    throw secondError;
+  }
+}
 
 function normalizeAiTaskOwner(owner: string | AiTaskOwner): NormalizedAiTaskOwner {
   const candidate: { userId?: unknown; guestId?: unknown } =
@@ -85,11 +166,15 @@ function getAiTaskOwnerQuery(owner: NormalizedAiTaskOwner): string {
 
 export async function fetchServerAiSessions(owner: string | AiTaskOwner): Promise<Session[]> {
   const normalizedOwner = normalizeAiTaskOwner(owner);
-  const response = await fetch(`/api/ai-sessions/${getAiOwnerPath(normalizedOwner)}${getAiOwnerQuery(normalizedOwner)}`);
+  const response = await fetchWithLocalizedNetworkError(
+    `/api/ai-sessions/${getAiOwnerPath(normalizedOwner)}${getAiOwnerQuery(normalizedOwner)}`,
+    undefined,
+    '加载 AI 历史失败，请检查网络后重试',
+  );
   const result = await readJsonResult(response);
 
   if (!response.ok) {
-    throw new Error(result.error || '加载 AI 历史失败');
+    throw createHttpError(response, result.error || '加载 AI 历史失败');
   }
 
   return Array.isArray(result?.sessions) ? result.sessions as Session[] : [];
@@ -97,17 +182,17 @@ export async function fetchServerAiSessions(owner: string | AiTaskOwner): Promis
 
 export async function createServerAiSession(owner: string | AiTaskOwner, model?: string): Promise<Session> {
   const normalizedOwner = normalizeAiTaskOwner(owner);
-  const response = await fetch('/api/ai-sessions', {
+  const response = await fetchWithLocalizedNetworkError('/api/ai-sessions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ ...normalizedOwner.body, model }),
-  });
+  }, '创建 AI 会话失败，请检查网络后重试');
 
   const result = await readJsonResult(response);
   if (!response.ok || !result?.session) {
-    throw new Error(result.error || '创建 AI 会话失败');
+    throw createHttpError(response, result.error || '创建 AI 会话失败');
   }
 
   return result.session as Session;
@@ -118,27 +203,29 @@ export async function deleteServerAiSession(
   sessionId: string,
 ): Promise<void> {
   const normalizedOwner = normalizeAiTaskOwner(owner);
-  const response = await fetch(
+  const response = await fetchWithLocalizedNetworkError(
     `/api/ai-sessions/${getAiOwnerPath(normalizedOwner)}/${encodeURIComponent(sessionId)}${getAiOwnerQuery(normalizedOwner)}`,
     { method: 'DELETE' },
+    '删除聊天记录失败，请检查网络后重试',
   );
 
   const result = await readJsonResult(response);
   if (!response.ok) {
-    throw new Error(result.error || '删除聊天记录失败');
+    throw createHttpError(response, result.error || '删除聊天记录失败');
   }
 }
 
 export async function clearServerAiSessions(owner: string | AiTaskOwner): Promise<number> {
   const normalizedOwner = normalizeAiTaskOwner(owner);
-  const response = await fetch(
+  const response = await fetchWithLocalizedNetworkError(
     `/api/ai-sessions/${getAiOwnerPath(normalizedOwner)}${getAiOwnerQuery(normalizedOwner)}`,
     { method: 'DELETE' },
+    '清空聊天记录失败，请检查网络后重试',
   );
 
   const result = await readJsonResult(response);
   if (!response.ok) {
-    throw new Error(result.error || '清空聊天记录失败');
+    throw createHttpError(response, result.error || '清空聊天记录失败');
   }
 
   return Number(result.deletedCount) || 0;
@@ -153,7 +240,7 @@ export async function createServerAiChatTask(
   config: APIConfig,
 ): Promise<{ task: ServerAiTask; sessionId: string; messageId: string }> {
   const normalizedOwner = normalizeAiTaskOwner(owner);
-  const response = await fetch('/api/ai-task/chat', {
+  const response = await fetchWithLocalizedNetworkError('/api/ai-task/chat', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -170,11 +257,11 @@ export async function createServerAiChatTask(
       maxTokens: config.maxTokens,
       topP: config.topP,
     }),
-  });
+  }, '聊天请求失败，请检查网络后重试');
 
   const result = await readJsonResult(response);
   if (!response.ok || !result?.task) {
-    throw new Error(result.error || '提交 AI 任务失败');
+    throw createHttpError(response, result.error || '提交 AI 任务失败');
   }
 
   return result as { task: ServerAiTask; sessionId: string; messageId: string };
@@ -186,28 +273,28 @@ export async function createServerAiImageTask(
   prompt: string,
   images: string[],
   imageProvider: ImageGenerationProvider,
+  requestId?: string,
 ): Promise<{ task: ServerAiTask; sessionId: string; messageId: string }> {
   const normalizedOwner = normalizeAiTaskOwner(owner);
-  const response = await fetchWithSingleRetry(
-    () => fetch('/api/ai-task/image', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        ...normalizedOwner.body,
-        sessionId,
-        prompt,
-        images,
-        imageProvider,
-      }),
+  const normalizedRequestId = normalizeOrCreateMediaRequestId(requestId);
+  const response = await fetchPaidMediaTask('/api/ai-task/image', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      ...normalizedOwner.body,
+      sessionId,
+      prompt,
+      images,
+      imageProvider,
+      requestId: normalizedRequestId,
     }),
-    '图片请求失败，请稍后重试',
-  );
+  }, '图片请求失败，请稍后重试');
 
   const result = await readJsonResult(response);
   if (!response.ok || !result?.task) {
-    throw new Error(result.error || '提交图片生成任务失败');
+    throw createHttpError(response, result.error || '提交图片生成任务失败');
   }
 
   return result as { task: ServerAiTask; sessionId: string; messageId: string };
@@ -218,17 +305,25 @@ export async function createServerAiVideoTask(
   sessionId: string | null | undefined,
   prompt: string,
   images: string[],
+  requestId?: string,
 ): Promise<{ task: ServerAiTask; sessionId: string; messageId: string }> {
   const normalizedOwner = normalizeAiTaskOwner(owner);
-  const response = await fetch('/api/ai-task/video', {
+  const normalizedRequestId = normalizeOrCreateMediaRequestId(requestId);
+  const response = await fetchPaidMediaTask('/api/ai-task/video', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...normalizedOwner.body, sessionId, prompt, images }),
-  });
+    body: JSON.stringify({
+      ...normalizedOwner.body,
+      sessionId,
+      prompt,
+      images,
+      requestId: normalizedRequestId,
+    }),
+  }, '视频请求失败，请稍后重试');
 
   const result = await readJsonResult(response);
   if (!response.ok || !result?.task) {
-    throw new Error(result.error || '提交视频生成任务失败');
+    throw createHttpError(response, result.error || '提交视频生成任务失败');
   }
 
   return result as { task: ServerAiTask; sessionId: string; messageId: string };
@@ -236,11 +331,15 @@ export async function createServerAiVideoTask(
 
 export async function fetchServerAiTask(taskId: string, owner: string | AiTaskOwner): Promise<ServerAiTask> {
   const normalizedOwner = normalizeAiTaskOwner(owner);
-  const response = await fetch(`/api/ai-task/${encodeURIComponent(taskId)}${getAiTaskOwnerQuery(normalizedOwner)}`);
+  const response = await fetchWithLocalizedNetworkError(
+    `/api/ai-task/${encodeURIComponent(taskId)}${getAiTaskOwnerQuery(normalizedOwner)}`,
+    undefined,
+    '加载任务状态失败，请检查网络后重试',
+  );
   const result = await readJsonResult(response);
 
   if (!response.ok || !result?.task) {
-    throw new Error(result.error || '加载任务状态失败');
+    throw createHttpError(response, result.error || '加载任务状态失败');
   }
 
   return result.task as ServerAiTask;
@@ -248,13 +347,15 @@ export async function fetchServerAiTask(taskId: string, owner: string | AiTaskOw
 
 export async function cancelServerAiTask(taskId: string, owner: string | AiTaskOwner): Promise<ServerAiTask> {
   const normalizedOwner = normalizeAiTaskOwner(owner);
-  const response = await fetch(`/api/ai-task/${encodeURIComponent(taskId)}/cancel${getAiTaskOwnerQuery(normalizedOwner)}`, {
-    method: 'POST',
-  });
+  const response = await fetchWithLocalizedNetworkError(
+    `/api/ai-task/${encodeURIComponent(taskId)}/cancel${getAiTaskOwnerQuery(normalizedOwner)}`,
+    { method: 'POST' },
+    '停止任务失败，请检查网络后重试',
+  );
   const result = await readJsonResult(response);
 
   if (!response.ok || !result?.task) {
-    throw new Error(result.error || '停止任务失败');
+    throw createHttpError(response, result.error || '停止任务失败');
   }
 
   return result.task as ServerAiTask;
@@ -264,7 +365,7 @@ export async function transcribeAiCallAudio(
   audioData: string,
   mimeType = 'audio/wav',
 ): Promise<string> {
-  const response = await fetch('/api/voice/transcribe', {
+  const response = await fetchWithLocalizedNetworkError('/api/voice/transcribe', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -273,11 +374,11 @@ export async function transcribeAiCallAudio(
       audioData,
       mimeType,
     }),
-  });
+  }, '语音转文字失败，请检查网络后重试');
 
   const result = await readJsonResult(response);
   if (!response.ok || typeof result?.text !== 'string') {
-    throw new Error(result?.error || '语音转文字失败');
+    throw createHttpError(response, result?.error || '语音转文字失败');
   }
 
   return String(result.text || '').trim();

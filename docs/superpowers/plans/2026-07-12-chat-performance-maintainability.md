@@ -60,7 +60,7 @@ import { describe, expect, it } from 'vitest';
 const ROOT = process.cwd();
 const TEXT_EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx', '.css', '.html', '.json', '.md', '.py', '.yml', '.yaml']);
 const SKIPPED = new Set(['node_modules', '.codex_deps', 'dist', 'workspace-artifacts', 'storage', 'dydownload-main', 'hhstu', '__pycache__']);
-const MOJIBAKE = /[\uE000-\uF8FF\uFFFD]|锟斤拷|鏂囦欢|鍥剧墖|鐢熸垚鍥|璇锋眰澶辫触|杩炴帴鎴愬姛|娌℃湁鏉冮檺|姝ｅ湪璇磋瘽|娴佺▼鍥|宸插悜/;
+const MOJIBAKE = /[\uE000-\uF8FF\uFFFD]|<known-mojibake-fragments>/;
 
 function collectTextFiles(directory, result = []) {
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
@@ -92,7 +92,7 @@ Expected: FAIL listing the currently corrupted lines in the five first-party sou
 
 - [ ] **Step 3: Replace only reliably recoverable text and add UTF-8 editor policy**
 
-Use the reversible GBK-to-UTF-8 mapping and the older sibling source only as evidence. Examples include `鏂囦欢 -> 文件`, `鍥剧墖 -> 图片`, `璇锋眰澶辫触 -> 请求失败`, `姝ｅ湪璇磋瘽涓?.. -> 正在说话中...`, and the malformed Mermaid error HTML -> `流程图渲染失败</div>`. Preserve identifiers, API payloads, and control flow.
+Use the reversible GBK-to-UTF-8 mapping and the older sibling source only as evidence. Repair corrupted labels for files, images, request failures, voice status, and Mermaid errors to their intended Chinese text. Preserve identifiers, API payloads, and control flow.
 
 ```ini
 root = true
