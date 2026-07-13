@@ -140,9 +140,9 @@ expect(toPublicAiErrorMessage('The generated images appear to be unsafe', 'image
 
 - [x] **Step 1: Run `npm test`, `npm run lint`, and `npm run build`; require zero failures**
 - [x] **Step 2: Review `git diff --check`, secret scans and generated output**
-- [ ] **Step 3: Back up the live release and persistent data, upload a timestamped release, preserve `.env`/storage symlinks, add admin bootstrap secrets with mode 600, and atomically switch the symlink**
-- [ ] **Step 4: Restart `hello-kitty-chat.service`, verify `/api/health`, guest chat access, auth registration/login, protected media rejection, admin login/code generation, one-time redemption and Chinese errors without calling paid generation APIs**
-- [ ] **Step 5: Inspect service logs, CPU/RSS and Nginx 4xx/5xx after deployment; roll back the symlink if any smoke check fails**
+- [x] **Step 3: Back up the live release and persistent data, upload a timestamped release, preserve `.env`/storage symlinks, add admin bootstrap secrets with mode 600, and atomically switch the symlink**
+- [x] **Step 4: Restart `hello-kitty-chat.service`, verify `/api/health`, guest chat access, auth registration/login, protected media rejection, admin login/code generation, one-time redemption and Chinese errors without calling paid generation APIs**
+- [x] **Step 5: Inspect service logs, CPU/RSS and Nginx 4xx/5xx after deployment; roll back the symlink if any smoke check fails**
 
 ---
 
