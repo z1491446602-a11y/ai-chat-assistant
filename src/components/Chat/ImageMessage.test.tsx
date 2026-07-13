@@ -57,6 +57,28 @@ describe('ImageMessage', () => {
     expect(within(container).getByText('AI 生成图片')).toBeTruthy();
     expect(within(container).getByRole('link', { name: '下载图片' }).getAttribute('href')).toBe('/uploads/legacy.png');
   });
+
+  it('shows multiple generated images in one horizontally scrollable preview track', () => {
+    const message = createMessage({
+      images: ['/uploads/one.png', '/uploads/two.png', '/uploads/three.png'],
+      imageWidth: 1024,
+      imageHeight: 1536,
+      status: 'sent',
+    });
+
+    render(<ImageMessage message={message} />);
+
+    const gallery = screen.getByRole('region', { name: '可横向滑动浏览 3 张生成图片' });
+    const previews = within(gallery).getAllByRole('link', { name: /查看原图/ });
+
+    expect(gallery.className).toContain('overflow-x-auto');
+    expect(gallery.className).toContain('snap-x');
+    expect(previews).toHaveLength(3);
+    expect(previews[0].className).toContain('shrink-0');
+    expect(previews[0].className).toContain('snap-start');
+    expect(previews[0].style.aspectRatio).toBe('1024 / 1536');
+    expect(within(previews[0]).getByRole('img').className).toContain('object-contain');
+  });
 });
 
 function createMessage(patch: Partial<Message>): Message {

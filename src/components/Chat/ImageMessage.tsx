@@ -63,29 +63,62 @@ export function ImageMessage({ message }: ImageMessageProps) {
     const aspectRatio = message.imageWidth && message.imageHeight
       ? `${message.imageWidth} / ${message.imageHeight}`
       : undefined;
+    const imageRatio = message.imageWidth && message.imageHeight
+      ? message.imageWidth / message.imageHeight
+      : 0;
+    const multiImagePreviewStyle = imageRatio > 0
+      ? {
+        aspectRatio,
+        width: `min(76vw, ${Math.max(12, imageRatio * 30)}rem)`,
+      }
+      : undefined;
 
     return (
       <div className="min-w-0 max-w-full overflow-hidden rounded-lg border border-sky-100 bg-white shadow-sm">
-        <div className={`grid gap-px bg-sky-100 ${imageUrls.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
-          {imageUrls.map((imageUrl, index) => (
+        {imageUrls.length === 1 ? (
+          <div className="grid grid-cols-1 bg-sky-100">
             <a
-              key={`${message.id}-generated-image-${index}`}
-              href={imageUrl}
+              href={primaryImageUrl}
               target="_blank"
               rel="noreferrer"
               className="block min-w-0 bg-slate-50"
-              style={imageUrls.length === 1 && aspectRatio ? { aspectRatio } : undefined}
-              aria-label={`查看原图 ${index + 1}`}
+              style={aspectRatio ? { aspectRatio } : undefined}
+              aria-label="查看原图 1"
             >
               <img
-                src={imageUrl}
-                alt={`AI 生成图片 ${index + 1}`}
-                className={`w-full object-contain ${imageUrls.length === 1 && aspectRatio ? 'h-full max-h-[32rem]' : 'h-auto max-h-[28rem]'}`}
+                src={primaryImageUrl}
+                alt="AI 生成图片 1"
+                className={`w-full object-contain ${aspectRatio ? 'h-full max-h-[32rem]' : 'h-auto max-h-[28rem]'}`}
                 loading="lazy"
               />
             </a>
-          ))}
-        </div>
+          </div>
+        ) : (
+          <div
+            className="flex snap-x snap-mandatory gap-2 overflow-x-auto overscroll-x-contain bg-sky-50 p-2 pr-8 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            role="region"
+            aria-label={`可横向滑动浏览 ${imageUrls.length} 张生成图片`}
+          >
+            {imageUrls.map((imageUrl, index) => (
+              <a
+                key={`${message.id}-generated-image-${index}`}
+                href={imageUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="block aspect-[4/5] w-[min(76vw,30rem)] shrink-0 snap-start overflow-hidden rounded-md bg-slate-100 transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2"
+                style={multiImagePreviewStyle}
+                aria-label={`查看原图 ${index + 1}`}
+              >
+                <img
+                  src={imageUrl}
+                  alt={`AI 生成图片 ${index + 1}`}
+                  className="h-full w-full object-contain"
+                  loading={index === 0 ? 'eager' : 'lazy'}
+                />
+              </a>
+            ))}
+          </div>
+        )}
         <div className="flex items-center justify-between gap-3 px-3 py-2.5">
           <span className="min-w-0 truncate text-xs text-slate-500">{metadata || message.imageFileName || 'AI 生成图片'}</span>
           <a
