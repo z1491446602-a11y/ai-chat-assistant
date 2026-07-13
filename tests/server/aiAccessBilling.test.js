@@ -683,6 +683,20 @@ describe('AI route ownership and media billing', () => {
     });
   });
 
+  it('reserves five image costs when the prompt requests five images', async () => {
+    const { baseUrl, pointsService } = await createRouteHarness();
+
+    const response = await postJson(baseUrl, '/api/ai-task/image', {
+      prompt: '生成5张城市夜景图片',
+      imageProvider: 'gpt',
+    }, 'signed-in-user');
+    const result = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(result.task.imageCount).toBe(5);
+    expect(pointsService.reserve).toHaveBeenCalledWith(expect.objectContaining({ costUnits: 10 }));
+  });
+
   it('returns 402 without creating a media task when points are insufficient', async () => {
     const reserve = vi.fn(() => {
       const error = new Error('Insufficient points');

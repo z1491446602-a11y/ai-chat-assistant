@@ -88,6 +88,19 @@ function validatePersistedFinancialData(data) {
       || !MEDIA_TASK_TYPES.has(reservation.taskType)
       || !RESERVATION_STATUSES.has(reservation.status)
       || !isTimestamp(reservation.createdAt)
+      || (Object.hasOwn(reservation, 'imageUnitCost') && (
+        !Number.isSafeInteger(reservation.imageUnitCost) || reservation.imageUnitCost <= 0
+      ))
+      || (Object.hasOwn(reservation, 'chargedUnits') && (
+        !isNonNegativeSafeInteger(reservation.chargedUnits)
+        || reservation.chargedUnits > reservation.costUnits
+      ))
+      || (Object.hasOwn(reservation, 'releasedUnits') && (
+        !isNonNegativeSafeInteger(reservation.releasedUnits)
+        || reservation.releasedUnits > reservation.costUnits
+        || !Object.hasOwn(reservation, 'chargedUnits')
+        || reservation.releasedUnits + reservation.chargedUnits !== reservation.costUnits
+      ))
     ) {
       invalidPersistedPoints('Persisted point reservation is invalid');
     }
@@ -475,19 +488,23 @@ export function createPointsService({
     });
   }
 
-  function reserve({ taskId, userId, costUnits, taskType } = {}) {
+  function reserve({ taskId, userId, costUnits, taskType, imageUnitCost } = {}) {
     assertPositiveInteger(costUnits);
     const normalizedTaskId = String(taskId || '').trim();
     const normalizedTaskType = String(taskType || '');
     if (!normalizedTaskId) {
       throw createServiceError('Task ID is required', 'INVALID_TASK_ID');
     }
+    if (imageUnitCost !== undefined && (!Number.isSafeInteger(imageUnitCost) || imageUnitCost <= 0)) {
+      throw createServiceError('Image unit cost must be a positive integer', 'INVALID_POINT_UNITS');
+    }
     const user = getUser(userId);
     const existing = data.pointReservations[normalizedTaskId];
     if (existing) {
       const matches = existing.userId === user.id
         && existing.costUnits === costUnits
-        && existing.taskType === normalizedTaskType;
+        && existing.taskType === normalizedTaskType
+        && existing.imageUnitCost === imageUnitCost;
       if (matches) {
         return existing;
       }
@@ -507,6 +524,7 @@ export function createPointsService({
         success: null,
         createdAt: now(),
         settledAt: null,
+        ...(imageUnitCost !== undefined ? { imageUnitCost } : {}),
       };
       data.pointReservations[normalizedTaskId] = reservation;
       addTransaction({
@@ -556,30 +574,38 @@ export function createPointsService({
     });
   }
 
-  function settleReservation(reservation, success, reason) {
+  function settleReservation(reservation, success, reason, chargedUnits = success ? reservation.costUnits : 0) {
     if (reservation.status !== 'reserved') {
       return false;
     }
 
-    reservation.status = success ? 'settled' : 'released';
-    reservation.success = Boolean(success);
+    if (!Number.isSafeInteger(chargedUnits) || chargedUnits < 0 || chargedUnits > reservation.costUnits) {
+      throw createServiceError('Invalid settlement units', 'INVALID_SETTLEMENT_UNITS');
+    }
+
+    const settled = Boolean(success) && chargedUnits > 0;
+
+    reservation.status = settled ? 'settled' : 'released';
+    reservation.success = settled;
+    reservation.chargedUnits = chargedUnits;
+    reservation.releasedUnits = reservation.costUnits - chargedUnits;
     reservation.settledAt = now();
     if (reason) {
       reservation.settlementReason = reason;
-      if (!success) {
+      if (!settled) {
         reservation.releaseReason = reason;
       }
     }
-    if (success) {
+    if (settled) {
       const user = getUser(reservation.userId);
       user.balanceUnits = (Number.isInteger(user.balanceUnits) ? user.balanceUnits : 0)
-        - reservation.costUnits;
+        - chargedUnits;
     }
     addTransaction({
-      type: success ? 'debit' : 'release',
+      type: settled ? 'debit' : 'release',
       userId: reservation.userId,
-      units: success ? -reservation.costUnits : 0,
-      costUnits: reservation.costUnits,
+      units: settled ? -chargedUnits : 0,
+      costUnits: settled ? chargedUnits : reservation.costUnits,
       taskId: reservation.taskId,
       taskType: reservation.taskType,
       ...(reason ? { reason } : {}),
@@ -597,6 +623,21 @@ export function createPointsService({
     }
     return persistMutation(() => {
       settleReservation(reservation, Boolean(success));
+      pruneTerminalReservations(new Set([reservation.taskId]));
+      return reservation;
+    });
+  }
+
+  function settlePartial(taskId, chargedUnits, reason) {
+    const reservation = data.pointReservations[String(taskId || '')];
+    if (!reservation) {
+      throw createServiceError('Reservation not found', 'RESERVATION_NOT_FOUND');
+    }
+    if (reservation.status !== 'reserved') {
+      return reservation;
+    }
+    return persistMutation(() => {
+      settleReservation(reservation, chargedUnits > 0, reason, chargedUnits);
       pruneTerminalReservations(new Set([reservation.taskId]));
       return reservation;
     });
@@ -620,10 +661,19 @@ export function createPointsService({
     return persistMutation(() => {
       for (const reservation of orphanedReservations) {
         const success = hasPersistedSuccessEvidence(reservation);
+        const message = findPersistedTaskMessage(reservation);
+        const completedImageCount = reservation.taskType === 'image'
+          ? (Array.isArray(message?.images) ? message.images.filter(image => String(image || '').trim()).length : 0)
+          : 0;
+        const chargedUnits = reservation.taskType === 'image'
+          && Number.isSafeInteger(reservation.imageUnitCost)
+          ? Math.min(reservation.costUnits, completedImageCount * reservation.imageUnitCost)
+          : undefined;
         settleReservation(
           reservation,
           success,
           success ? 'recovered_success' : 'orphaned',
+          chargedUnits,
         );
       }
       pruneTerminalReservations();
@@ -760,6 +810,7 @@ export function createPointsService({
     reserve,
     linkMediaTask,
     settle,
+    settlePartial,
     reconcileReservations,
     generateRedeemCode,
     redeemCode,

@@ -1245,7 +1245,7 @@ export function createAiProviders({
     });
   }
 
-  async function performImageGeneration({
+  async function performSingleImageGeneration({
     prompt,
     images,
     provider,
@@ -1407,6 +1407,37 @@ export function createAiProviders({
       imageMimeType: primaryAsset.mimeType,
       imageWidth: primaryAsset.width,
       imageHeight: primaryAsset.height,
+    };
+  }
+
+  async function performImageGeneration({
+    prompt,
+    images,
+    provider,
+    signal,
+    onProgress,
+    count = 1,
+  }) {
+    const requestedCount = Number.isSafeInteger(count) && count > 0 ? count : 1;
+    const outcomes = await Promise.allSettled(Array.from(
+      { length: requestedCount },
+      () => performSingleImageGeneration({ prompt, images, provider, signal, onProgress }),
+    ));
+    const successes = outcomes
+      .filter(outcome => outcome.status === 'fulfilled')
+      .map(outcome => outcome.value);
+
+    if (!successes.length) {
+      const failure = outcomes.find(outcome => outcome.status === 'rejected');
+      throw failure?.reason || new Error('Image generation failed');
+    }
+
+    const primaryResult = successes[0];
+    return {
+      ...primaryResult,
+      images: successes.flatMap(result => result.images || []),
+      completedCount: successes.length,
+      failedCount: outcomes.length - successes.length,
     };
   }
 

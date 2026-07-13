@@ -58,8 +58,8 @@ describe('media server config', () => {
     const envExample = fs.readFileSync(path.resolve('.env.example'), 'utf8');
 
     expect(config).toMatchObject({
-      MEDIA_TASK_MAX_CONCURRENCY: 4,
-      IMAGE_TASK_MAX_CONCURRENCY: 3,
+      MEDIA_TASK_MAX_CONCURRENCY: 5,
+      IMAGE_TASK_MAX_CONCURRENCY: 5,
       VIDEO_TASK_MAX_CONCURRENCY: 1,
       MEDIA_TASK_MAX_QUEUE: 24,
       MEDIA_TASK_MAX_QUEUED_PER_OWNER: 2,

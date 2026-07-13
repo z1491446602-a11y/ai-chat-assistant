@@ -322,6 +322,35 @@ describe('AI media task scheduling', () => {
     expect(lifecycle).toEqual(['points', 'request:completed']);
   });
 
+  it('charges only successful images from a partially completed image batch', async () => {
+    const settleMediaTask = vi.fn();
+    const { store, sessions, patches } = createHarness({
+      scheduler: createMediaTaskScheduler({ maxConcurrent: 5, imageMaxConcurrent: 5 }),
+      performImageGeneration: vi.fn().mockResolvedValue({
+        images: ['/uploads/1.png', '/uploads/2.png', '/uploads/3.png'],
+        imageProvider: 'gpt',
+        completedCount: 3,
+        failedCount: 2,
+      }),
+      videoProvider: { submit: vi.fn(), poll: vi.fn() },
+      settleMediaTask,
+    });
+    const task = createTask('batch-partial', 'image', 'owner-a');
+    task.imageCount = 5;
+    task.imageUnitCost = 2;
+    sessions.set(task.sessionId, { id: task.sessionId, messages: [] });
+    store.registerAiTask(task);
+
+    await store.runAiTask(task.id);
+
+    expect(settleMediaTask).toHaveBeenCalledWith(task.id, true, 6);
+    expect(patches.at(-1)?.patch).toMatchObject({
+      content: '已生成 3/5 张图片，2 张失败。',
+      images: ['/uploads/1.png', '/uploads/2.png', '/uploads/3.png'],
+      status: 'sent',
+    });
+  });
+
   it('retries failed media settlement with bounded backoff until it succeeds', async () => {
     vi.useFakeTimers();
     try {

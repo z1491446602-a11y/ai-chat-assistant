@@ -404,10 +404,13 @@ function normalizeUserId(userId) {
   return String(userId || '').trim();
 }
 
-function settlePersistedMediaTask(taskId, success) {
-  return data.pointReservations?.[taskId]
+function settlePersistedMediaTask(taskId, success, chargedUnits) {
+  if (!data.pointReservations?.[taskId]) {
+    return null;
+  }
+  return chargedUnits === undefined
     ? pointsService.settle(taskId, success)
-    : null;
+    : pointsService.settlePartial(taskId, chargedUnits);
 }
 
 videoFileStore.ensureVideoDir();

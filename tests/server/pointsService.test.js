@@ -266,6 +266,18 @@ describe('points service', () => {
     expect(saveData).toHaveBeenCalled();
   });
 
+  it('charges only successful images from a reserved batch', () => {
+    const { data, points } = createHarness({ balanceUnits: 20 });
+    points.reserve({ taskId: 'batch-1', userId: 'user-1', costUnits: 10, taskType: 'image' });
+
+    points.settlePartial('batch-1', 4);
+
+    expect(points.getBalance('user-1')).toEqual({ balanceUnits: 16, availableUnits: 16 });
+    expect(data.pointReservations['batch-1']).toMatchObject({
+      status: 'settled', success: true, chargedUnits: 4, releasedUnits: 6,
+    });
+  });
+
   it('defines one tenth of a point as one unit and fixed media costs', () => {
     expect(POINT_UNITS_PER_POINT).toBe(10);
     expect(MEDIA_COST_UNITS).toEqual({ gpt: 2, grok: 1, video: 15 });

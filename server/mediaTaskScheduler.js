@@ -28,6 +28,7 @@ export function createMediaTaskScheduler(options = {}) {
   const maxQueuedPerOwner = normalizeLimit(options.maxQueuedPerOwner, 2);
   const queue = [];
   const activeJobs = new Map();
+  let activeSlots = 0;
   const activeByType = { image: 0, video: 0 };
   const activeByOwner = new Map();
 
@@ -36,14 +37,15 @@ export function createMediaTaskScheduler(options = {}) {
   }
 
   function canStart(job) {
-    return activeJobs.size < maxConcurrent
-      && activeByType[job.type] < limitsByType[job.type]
+    return activeSlots + job.slots <= maxConcurrent
+      && activeByType[job.type] + job.slots <= limitsByType[job.type]
       && getOwnerActiveCount(job.ownerId) < ownerMaxConcurrent;
   }
 
   function release(job) {
     activeJobs.delete(job.id);
-    activeByType[job.type] -= 1;
+    activeSlots -= job.slots;
+    activeByType[job.type] -= job.slots;
     const ownerActiveCount = getOwnerActiveCount(job.ownerId) - 1;
     if (ownerActiveCount > 0) {
       activeByOwner.set(job.ownerId, ownerActiveCount);
@@ -55,7 +57,8 @@ export function createMediaTaskScheduler(options = {}) {
 
   function start(job) {
     activeJobs.set(job.id, job);
-    activeByType[job.type] += 1;
+    activeSlots += job.slots;
+    activeByType[job.type] += job.slots;
     activeByOwner.set(job.ownerId, getOwnerActiveCount(job.ownerId) + 1);
     const execution = (async () => {
       try {
@@ -69,7 +72,7 @@ export function createMediaTaskScheduler(options = {}) {
   }
 
   function pump() {
-    while (activeJobs.size < maxConcurrent && queue.length) {
+    while (activeSlots < maxConcurrent && queue.length) {
       const nextIndex = queue.findIndex(canStart);
       if (nextIndex === -1) {
         return;
@@ -90,7 +93,11 @@ export function createMediaTaskScheduler(options = {}) {
       return Promise.reject(new TypeError(`媒体任务已存在: ${id}`));
     }
 
-    const job = { ...input, id, type, ownerId };
+    const slots = normalizeLimit(input?.slots, 1);
+    if (slots > maxConcurrent || slots > limitsByType[type]) {
+      return Promise.reject(new TypeError('媒体任务并发数超过限制'));
+    }
+    const job = { ...input, id, type, ownerId, slots };
     const startsImmediately = canStart(job);
     if (!startsImmediately) {
       const queuedForOwner = queue.filter(queuedJob => queuedJob.ownerId === ownerId).length;
@@ -136,6 +143,7 @@ export function createMediaTaskScheduler(options = {}) {
   function getStats() {
     return {
       active: activeJobs.size,
+      activeSlots,
       queued: queue.length,
       activeByType: { ...activeByType },
     };

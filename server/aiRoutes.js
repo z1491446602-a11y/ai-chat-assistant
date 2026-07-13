@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 import { decodeBase64AudioInput } from './mediaPayload.js';
 import { getResponseErrorMessage } from './upstreamErrors.js';
 import { resolveImageTaskReferences } from './imageFollowUp.js';
+import { getRequestedImageCount } from './imageBatch.js';
 import { MEDIA_COST_UNITS } from './pointsService.js';
 import { toPublicAiErrorMessage } from './publicAiErrors.js';
 import { normalizeImageReferenceList } from './imageReferences.js';
@@ -917,6 +918,12 @@ export function registerAiRoutes(app, deps) {
     }
 
     const prompt = String(req.body.prompt || '').trim();
+    let imageCount;
+    try {
+      imageCount = getRequestedImageCount(prompt);
+    } catch (error) {
+      return res.status(400).json({ error: error.message });
+    }
     let explicitImages;
     try {
       explicitImages = normalizeImageReferenceList(req.body.images);
@@ -950,6 +957,7 @@ export function registerAiRoutes(app, deps) {
         version: 1,
         sessionId: String(req.body.sessionId || '').trim(),
         prompt,
+        imageCount,
         imageProvider: imageProvider.id,
         images: explicitImages,
       }),
@@ -979,8 +987,9 @@ export function registerAiRoutes(app, deps) {
     const reservationError = reserveMediaPoints({
       taskId,
       userId: ownerLookup.ownerId,
-      costUnits: imageProvider.id === 'grok' ? MEDIA_COST_UNITS.grok : MEDIA_COST_UNITS.gpt,
+      costUnits: (imageProvider.id === 'grok' ? MEDIA_COST_UNITS.grok : MEDIA_COST_UNITS.gpt) * imageCount,
       taskType: 'image',
+      imageUnitCost: imageProvider.id === 'grok' ? MEDIA_COST_UNITS.grok : MEDIA_COST_UNITS.gpt,
     });
     if (reservationError) {
       abortMediaRequestClaim(mediaClaim);
@@ -1036,6 +1045,8 @@ export function registerAiRoutes(app, deps) {
         createdAt: Date.now(),
         updatedAt: Date.now(),
         imageProvider: imageProvider.id,
+        imageCount,
+        imageUnitCost: imageProvider.id === 'grok' ? MEDIA_COST_UNITS.grok : MEDIA_COST_UNITS.gpt,
         imageStage: 'submitting',
         prompt,
         images: requestImages,
@@ -1457,6 +1468,12 @@ export function registerAiRoutes(app, deps) {
     const requestId = getCompatibleMediaRequestId(getLegacyImageRequestId(req));
 
     const prompt = String(req.body?.prompt || '').trim();
+    let imageCount;
+    try {
+      imageCount = getRequestedImageCount(prompt);
+    } catch (error) {
+      return res.status(400).json({ error: error.message });
+    }
     let explicitImages;
     try {
       explicitImages = normalizeImageReferenceList(req.body?.images);
@@ -1488,6 +1505,7 @@ export function registerAiRoutes(app, deps) {
         version: 1,
         sessionId: String(req.body?.sessionId || '').trim(),
         prompt,
+        imageCount,
         imageProvider: imageProvider.id,
         images: explicitImages,
       }),
@@ -1533,8 +1551,9 @@ export function registerAiRoutes(app, deps) {
         const reservationError = reserveMediaPoints({
           taskId,
           userId: ownerLookup.ownerId,
-          costUnits: imageProvider.id === 'grok' ? MEDIA_COST_UNITS.grok : MEDIA_COST_UNITS.gpt,
+          costUnits: (imageProvider.id === 'grok' ? MEDIA_COST_UNITS.grok : MEDIA_COST_UNITS.gpt) * imageCount,
           taskType: 'image',
+          imageUnitCost: imageProvider.id === 'grok' ? MEDIA_COST_UNITS.grok : MEDIA_COST_UNITS.gpt,
         });
         if (reservationError) {
           abortMediaRequestClaim(mediaClaim);
@@ -1591,6 +1610,8 @@ export function registerAiRoutes(app, deps) {
             createdAt: Date.now(),
             updatedAt: Date.now(),
             imageProvider: imageProvider.id,
+            imageCount,
+            imageUnitCost: imageProvider.id === 'grok' ? MEDIA_COST_UNITS.grok : MEDIA_COST_UNITS.gpt,
             imageStage: 'submitting',
             prompt,
             images: requestImages,

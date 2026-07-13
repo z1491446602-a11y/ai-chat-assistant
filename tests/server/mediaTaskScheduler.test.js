@@ -223,4 +223,28 @@ describe('media task scheduler', () => {
     await expect(nextPromise).resolves.toBe('next-done');
     expect(scheduler.getStats()).toMatchObject({ active: 0, queued: 0 });
   });
+
+  it('holds five image slots for one batch before starting another image task', async () => {
+    const scheduler = createMediaTaskScheduler({
+      maxConcurrent: 5,
+      imageMaxConcurrent: 5,
+      videoMaxConcurrent: 1,
+      ownerMaxConcurrent: 1,
+      maxQueued: 10,
+      maxQueuedPerOwner: 10,
+    });
+    const batch = createDeferred();
+    const next = createDeferred();
+    const started = [];
+    const batchPromise = scheduler.schedule({ ...createJob('batch', 'image', 'owner-a', batch, started), slots: 5 });
+    const nextPromise = scheduler.schedule(createJob('next', 'image', 'owner-b', next, started));
+
+    expect(started).toEqual(['batch']);
+    expect(scheduler.getStats()).toMatchObject({ active: 1, activeSlots: 5, activeByType: { image: 5, video: 0 } });
+
+    batch.resolve();
+    await vi.waitFor(() => expect(started).toEqual(['batch', 'next']));
+    next.resolve();
+    await Promise.all([batchPromise, nextPromise]);
+  });
 });

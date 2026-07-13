@@ -425,7 +425,7 @@ export function createAiTaskStore({
     }
   }
 
-  function settleMediaReservation(task, success) {
+  function settleMediaReservation(task, success, chargedUnits) {
     if (
       !task
       || !['image', 'video'].includes(task.type)
@@ -439,10 +439,21 @@ export function createAiTaskStore({
     if (task.pointsSettlementSuccess === undefined) {
       task.pointsSettlementSuccess = Boolean(success);
     }
+    if (chargedUnits !== undefined && task.pointsSettlementChargedUnits === undefined) {
+      task.pointsSettlementChargedUnits = chargedUnits;
+    }
     task.pointsFinalized = false;
     task.pointsSettlementAttempts = (Number(task.pointsSettlementAttempts) || 0) + 1;
     try {
-      settleMediaTask(task.id, task.pointsSettlementSuccess);
+      if (task.pointsSettlementChargedUnits === undefined) {
+        settleMediaTask(task.id, task.pointsSettlementSuccess);
+      } else {
+        settleMediaTask(
+          task.id,
+          task.pointsSettlementSuccess,
+          task.pointsSettlementChargedUnits,
+        );
+      }
       task.pointsFinalized = true;
       delete task.pointsSettlementExhausted;
     } catch (error) {
@@ -464,7 +475,11 @@ export function createAiTaskStore({
         if (task.pointsSettlementTimer === timer) {
           delete task.pointsSettlementTimer;
         }
-        settleMediaReservation(task, task.pointsSettlementSuccess);
+        settleMediaReservation(
+          task,
+          task.pointsSettlementSuccess,
+          task.pointsSettlementChargedUnits,
+        );
       }, retryDelay);
       task.pointsSettlementTimer = timer;
       timer.unref?.();
@@ -483,8 +498,10 @@ export function createAiTaskStore({
     timer.unref?.();
   }
 
-  function finalizeTaskResources(task, settlementSuccess) {
-    runCleanupStep(task, 'settle points', () => settleMediaReservation(task, settlementSuccess));
+  function finalizeTaskResources(task, settlementSuccess, settlementChargedUnits) {
+    runCleanupStep(task, 'settle points', () => (
+      settleMediaReservation(task, settlementSuccess, settlementChargedUnits)
+    ));
     runCleanupStep(task, 'clear session task', () => (
       clearAiSessionTask(getTaskOwnerRef(task), task.sessionId, task.id)
     ));
@@ -635,6 +652,7 @@ export function createAiTaskStore({
       imageWidth: task.imageWidth,
       imageHeight: task.imageHeight,
       imageProvider: task.imageProvider,
+      imageCount: task.imageCount,
       videoStage: task.videoStage,
       videoUrl: task.videoUrl,
       videoMimeType: task.videoMimeType,
@@ -760,6 +778,7 @@ export function createAiTaskStore({
           prompt: task.prompt,
           images: task.images,
           provider: task.imageProvider,
+          count: task.imageCount || 1,
           signal: controller.signal,
           onProgress: (stage) => {
             updateImageStage(task, stage);
@@ -767,7 +786,17 @@ export function createAiTaskStore({
         });
         throwIfCancelled(task, controller);
 
-        task.partialContent = getImageTaskProgressText(task, 'completed');
+        const completedCount = Number.isSafeInteger(result.completedCount)
+          ? result.completedCount
+          : 1;
+        const requestedCount = Number.isSafeInteger(task.imageCount) ? task.imageCount : 1;
+        const imageUnitCost = Number(task.imageUnitCost);
+        if (Number.isSafeInteger(imageUnitCost) && imageUnitCost > 0) {
+          task.pointsSettlementChargedUnits = imageUnitCost * completedCount;
+        }
+        task.partialContent = requestedCount > 1
+          ? `已生成 ${completedCount}/${requestedCount} 张图片${result.failedCount ? `，${result.failedCount} 张失败。` : '。'}`
+          : getImageTaskProgressText(task, 'completed');
         task.partialImages = Array.isArray(result.images) ? result.images : [];
         task.imageStage = undefined;
         task.imageFileName = result.imageFileName;
@@ -779,7 +808,7 @@ export function createAiTaskStore({
         task.updatedAt = Date.now();
 
         requirePersistedTaskResult(patchAiMessage(ownerRef, task.sessionId, task.messageId, {
-          content: Array.isArray(task.images) && task.images.length ? '已完成图生图。' : '已生成图片。',
+          content: task.partialContent,
           images: result.images,
           imageGenerationStage: undefined,
           imageFileName: result.imageFileName,
@@ -887,7 +916,11 @@ export function createAiTaskStore({
         clearInterval(taskHeartbeatTimer);
       }
       delete task.abortController;
-      finalizeTaskResources(task, task.status === 'completed');
+      finalizeTaskResources(
+        task,
+        task.status === 'completed',
+        task.pointsSettlementChargedUnits,
+      );
     }
   }
 
@@ -931,6 +964,7 @@ export function createAiTaskStore({
         id: task.id,
         type: task.type,
         ownerId: `${task.ownerType || 'user'}:${task.ownerId || task.userId}`,
+        slots: task.type === 'image' ? (task.imageCount || 1) : 1,
         run: () => executeAiTask(task.id),
       });
     } catch (error) {
