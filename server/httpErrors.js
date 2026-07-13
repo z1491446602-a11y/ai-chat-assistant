@@ -12,6 +12,10 @@ function isMalformedJsonError(error) {
     || (errorStatus(error) === 400 && error instanceof SyntaxError);
 }
 
+function isCorsOriginDeniedError(error) {
+  return error?.code === 'CORS_ORIGIN_DENIED';
+}
+
 export function registerTerminalErrorHandler(app, {
   logger = (...args) => console.error(...args),
 } = {}) {
@@ -33,6 +37,10 @@ export function registerTerminalErrorHandler(app, {
     }
     if (isMalformedJsonError(error)) {
       res.status(400).json({ error: '请求内容格式错误' });
+      return;
+    }
+    if (isCorsOriginDeniedError(error)) {
+      res.status(403).json({ error: '不允许跨域访问' });
       return;
     }
 

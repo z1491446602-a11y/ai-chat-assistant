@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { createServer } from 'node:http';
 import { describe, expect, it } from 'vitest';
+import { registerTerminalErrorHandler } from '../../server/httpErrors.js';
 
 async function loadPolicy() {
   return import('../../server/corsPolicy.js');
@@ -70,6 +71,28 @@ describe('same-origin CORS policy', () => {
 
     expect(result.error).toMatchObject({ status: 403, statusCode: 403, code: 'CORS_ORIGIN_DENIED' });
     expect(result.options).toBeUndefined();
+  });
+
+  it('returns a fixed Chinese 403 response for a denied browser origin', async () => {
+    const { applySameOriginCorsPolicy } = await loadPolicy();
+    const app = express();
+    applySameOriginCorsPolicy(app, cors);
+    app.get('/api/private', (_req, res) => res.json({ private: true }));
+    registerTerminalErrorHandler(app, { logger: () => {} });
+    const server = createServer(app);
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const address = server.address();
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/private`, {
+        headers: { Origin: 'https://attacker.example' },
+      });
+
+      expect(response.status).toBe(403);
+      expect(response.headers.get('content-type')).toContain('application/json');
+      expect(await response.json()).toEqual({ error: '不允许跨域访问' });
+    } finally {
+      await new Promise(resolve => server.close(resolve));
+    }
   });
 
   it('removes the Express disclosure header from actual responses', async () => {
