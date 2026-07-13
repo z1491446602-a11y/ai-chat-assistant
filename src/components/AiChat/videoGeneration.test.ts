@@ -9,14 +9,15 @@ import {
 } from './videoGeneration';
 
 describe('video generation reference files', () => {
-  it('accepts up to two PNG, JPEG, or WebP files within 10 MB', () => {
+  it('accepts up to three PNG, JPEG, or WebP files within 10 MB', () => {
     const files = [
       new File(['png'], 'first.png', { type: 'image/png' }),
       new File(['webp'], 'second.webp', { type: 'image/webp' }),
+      new File(['jpeg'], 'third.jpg', { type: 'image/jpeg' }),
     ];
 
     expect(validateVideoReferenceFiles(files, 0)).toEqual(files);
-    expect(MAX_VIDEO_REFERENCE_IMAGES).toBe(2);
+    expect(MAX_VIDEO_REFERENCE_IMAGES).toBe(3);
   });
 
   it('rejects unsupported, oversized, and excess reference files', () => {
@@ -26,7 +27,7 @@ describe('video generation reference files', () => {
 
     expect(() => validateVideoReferenceFiles([unsupported], 0)).toThrow('PNG、JPEG 或 WebP');
     expect(() => validateVideoReferenceFiles([oversized], 0)).toThrow('10 MB');
-    expect(() => validateVideoReferenceFiles([valid, valid], 1)).toThrow('最多添加 2 张');
+    expect(() => validateVideoReferenceFiles([valid, valid], 2)).toThrow('最多添加 3 张');
   });
 });
 

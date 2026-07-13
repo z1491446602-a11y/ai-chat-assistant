@@ -1,4 +1,5 @@
 const PUBLIC_STATUSES = new Set(['queued', 'processing', 'completed', 'failed']);
+export const MAX_VIDEO_REFERENCE_IMAGES = 3;
 
 function normalizeImages(images) {
   if (images == null) return [];
@@ -10,12 +11,14 @@ export function buildVideoRequestBody({ model, prompt, images = [] }) {
   const normalizedPrompt = String(prompt || '').trim();
   const normalizedImages = normalizeImages(images);
   if (!normalizedPrompt) throw new Error('Video prompt is required');
-  if (normalizedImages.length > 2) throw new Error('Video generation supports at most 2 images');
+  if (normalizedImages.length > MAX_VIDEO_REFERENCE_IMAGES) {
+    throw new Error(`Video generation supports at most ${MAX_VIDEO_REFERENCE_IMAGES} images`);
+  }
 
   const body = { model: String(model || '').trim(), prompt: normalizedPrompt };
   if (normalizedImages.length === 1) {
     body.image = { image_url: normalizedImages[0] };
-  } else if (normalizedImages.length === 2) {
+  } else if (normalizedImages.length > 1) {
     body.images = normalizedImages.map(image_url => ({ image_url }));
   }
   return body;

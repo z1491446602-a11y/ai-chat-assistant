@@ -3,6 +3,7 @@ import { FileText, ImagePlus, LoaderCircle, Mic, Send, Square, Video, X } from '
 import type { MessageFile } from '@/types';
 import type { ImageGenerationProvider } from '@/services/api';
 import { AiChatComposerAttachments } from './AiChatComposerAttachments';
+import { MAX_VIDEO_REFERENCE_IMAGES } from './videoGeneration';
 
 interface AiChatComposerProps {
   isStreaming: boolean;
@@ -108,7 +109,7 @@ export function AiChatComposer(props: AiChatComposerProps) {
           </div></div>
         ) : null}
         <div className="px-3 pb-2 pt-1"><div className="mx-auto max-w-[980px] rounded-[24px] border border-sky-100 bg-white px-3 py-2 shadow-sm">
-          {props.isVideoGenerationMode ? <div className="mb-2 flex items-center gap-2 border-b border-sky-100 px-2 pb-2 text-xs text-slate-700"><Video className="h-4 w-4" /><span className="flex-1">{props.pendingAiVideoImages.length ? '图生视频' : '文生视频'} · {props.pendingAiVideoImages.length}/2 张参考图</span><button type="button" onClick={props.onOpenAiVideoImagePicker} disabled={props.pendingAiVideoImages.length >= 2 || busy} aria-label="添加视频参考图"><ImagePlus className="h-4 w-4" /></button></div> : null}
+          {props.isVideoGenerationMode ? <div className="mb-2 flex items-center gap-2 border-b border-sky-100 px-2 pb-2 text-xs text-slate-700"><Video className="h-4 w-4" /><span className="flex-1">{props.pendingAiVideoImages.length ? '图生视频' : '文生视频'} · {props.pendingAiVideoImages.length}/{MAX_VIDEO_REFERENCE_IMAGES} 张参考图</span><button type="button" onClick={props.onOpenAiVideoImagePicker} disabled={props.pendingAiVideoImages.length >= MAX_VIDEO_REFERENCE_IMAGES || busy} aria-label="添加视频参考图"><ImagePlus className="h-4 w-4" /></button></div> : null}
           <textarea ref={props.composerRef} value={props.input} onChange={event => props.onInputChange(event.target.value)} placeholder={props.placeholder} rows={1} className="block max-h-[168px] min-h-[36px] w-full resize-none bg-transparent px-2 py-1 text-[15px] leading-6 outline-none" onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); props.onSendMessage(); } }} disabled={busy} />
           <div className="mt-1.5 flex min-w-0 items-center justify-between gap-2">
             <AiChatComposerAttachments selectedImageProviderLabel={props.selectedImageProviderLabel} showMoreActions={props.showMoreActions} showImageProviderMenu={props.showImageProviderMenu} imageProviderOptions={props.imageProviderOptions} effectiveImageGenerationMode={props.effectiveImageGenerationMode} isVideoGenerationMode={props.isVideoGenerationMode} isGeneratingVideoTask={props.isGeneratingVideoTask} isUploadingImages={props.isUploadingImages} isUploadingFile={props.isUploadingFile} disabled={props.loading} mediaEnabled={props.mediaEnabled} onRequireLogin={props.onRequireLogin} onToggleImageProviderMenu={props.onToggleImageProviderMenu} onSelectImageProvider={props.onSelectImageProvider} onToggleImageGenerationMode={props.onToggleImageGenerationMode} onToggleVideoGenerationMode={props.onToggleVideoGenerationMode} onOpenMoreActions={props.onOpenMoreActions} onOpenAiImagePicker={props.onOpenAiImagePicker} onOpenAiFilePicker={props.onOpenAiFilePicker} />

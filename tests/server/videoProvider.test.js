@@ -6,7 +6,7 @@ import {
 } from '../../server/videoProvider.js';
 
 describe('video provider payloads', () => {
-  it('builds exact payloads for zero, one, and two images', () => {
+  it('builds exact payloads for zero, one, two, and three images', () => {
     expect(buildVideoRequestBody({ model: 'veo', prompt: 'go', images: [] }))
       .toEqual({ model: 'veo', prompt: 'go' });
     expect(buildVideoRequestBody({ model: 'veo', prompt: 'go', images: ['https://a/1.png'] }))
@@ -17,11 +17,17 @@ describe('video provider payloads', () => {
         prompt: 'go',
         images: [{ image_url: 'https://a/1.png' }, { image_url: 'https://a/2.png' }],
       });
+    expect(buildVideoRequestBody({ model: 'veo', prompt: 'go', images: ['https://a/1.png', 'https://a/2.png', 'https://a/3.png'] }))
+      .toEqual({
+        model: 'veo',
+        prompt: 'go',
+        images: [{ image_url: 'https://a/1.png' }, { image_url: 'https://a/2.png' }, { image_url: 'https://a/3.png' }],
+      });
   });
 
-  it('rejects an empty prompt and more than two images', () => {
+  it('rejects an empty prompt and more than three images', () => {
     expect(() => buildVideoRequestBody({ model: 'veo', prompt: ' ', images: [] })).toThrow(/prompt/i);
-    expect(() => buildVideoRequestBody({ model: 'veo', prompt: 'go', images: ['1', '2', '3'] })).toThrow(/images/i);
+    expect(() => buildVideoRequestBody({ model: 'veo', prompt: 'go', images: ['1', '2', '3', '4'] })).toThrow('at most 3 images');
   });
 });
 

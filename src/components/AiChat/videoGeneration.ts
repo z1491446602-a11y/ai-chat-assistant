@@ -1,6 +1,6 @@
 import type { VideoGenerationStage } from '@/types';
 
-export const MAX_VIDEO_REFERENCE_IMAGES = 2;
+export const MAX_VIDEO_REFERENCE_IMAGES = 3;
 export const MAX_VIDEO_REFERENCE_BYTES = 10 * 1024 * 1024;
 export const VIDEO_REFERENCE_ACCEPT = 'image/png,image/jpeg,image/webp';
 
@@ -16,7 +16,7 @@ export const VIDEO_STAGE_LABELS: Record<VideoGenerationStage, string> = {
 
 export function validateVideoReferenceFiles(files: File[], currentCount: number): File[] {
   if (currentCount + files.length > MAX_VIDEO_REFERENCE_IMAGES) {
-    throw new Error('视频参考图最多添加 2 张');
+    throw new Error('视频参考图最多添加 3 张');
   }
 
   for (const file of files) {

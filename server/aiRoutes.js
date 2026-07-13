@@ -5,6 +5,7 @@ import { resolveImageTaskReferences } from './imageFollowUp.js';
 import { MEDIA_COST_UNITS } from './pointsService.js';
 import { toPublicAiErrorMessage } from './publicAiErrors.js';
 import { normalizeImageReferenceList } from './imageReferences.js';
+import { MAX_VIDEO_REFERENCE_IMAGES } from './videoProvider.js';
 import { MAX_VIDEO_PROMPT_LENGTH } from './videoJobs.js';
 
 export const GUEST_OPERATION_WINDOW_MS = 60_000;
@@ -480,8 +481,8 @@ export function registerAiRoutes(app, deps) {
     if (!Array.isArray(input)) {
       throw new Error('参考图必须是数组');
     }
-    if (input.length > 2) {
-      throw new Error('最多上传 2 张参考图');
+    if (input.length > MAX_VIDEO_REFERENCE_IMAGES) {
+      throw new Error(`最多上传 ${MAX_VIDEO_REFERENCE_IMAGES} 张参考图`);
     }
 
     return input.map((item) => {

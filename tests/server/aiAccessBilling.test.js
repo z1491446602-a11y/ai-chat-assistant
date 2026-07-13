@@ -899,6 +899,24 @@ describe('AI route ownership and media billing', () => {
     expect(requestRecord.requestId).toMatch(/^media_request-/);
   });
 
+  it('accepts three video reference images for an authenticated user', async () => {
+    const { baseUrl, pointsService } = await createRouteHarness();
+    const images = [
+      'data:image/png;base64,AA==',
+      'data:image/jpeg;base64,AQ==',
+      'data:image/webp;base64,Ag==',
+    ];
+
+    const response = await postJson(baseUrl, '/api/ai-task/video', {
+      prompt: '使用三张参考图生成视频',
+      images,
+    }, 'signed-in-user');
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).task.images).toEqual(images);
+    expect(pointsService.reserve).toHaveBeenCalledTimes(1);
+  });
+
   it('claims an image session before asynchronous reference reads so concurrent submissions conflict', async () => {
     const hydration = createDeferred();
     const resolveImageReferences = vi.fn(() => hydration.promise);
