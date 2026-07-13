@@ -76,6 +76,26 @@ describe('AccountDialog', () => {
     expect(onLogin).toHaveBeenCalledWith({ phone: '13800138000', password: 'password1' });
   });
 
+  it('keeps the password focused when its parent supplies a new close callback', () => {
+    vi.useFakeTimers();
+    try {
+      const { props, rerender } = renderDialog();
+      const phoneInput = screen.getByLabelText('手机号');
+      const passwordInput = screen.getByLabelText('密码');
+
+      act(() => vi.runOnlyPendingTimers());
+      expect(document.activeElement).toBe(phoneInput);
+
+      passwordInput.focus();
+      rerender(<AccountDialog {...props} onClose={() => undefined} />);
+      act(() => vi.runOnlyPendingTimers());
+
+      expect(document.activeElement).toBe(passwordInput);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('switches to registration and submits phone, password and real name', async () => {
     const onRegister = vi.fn();
     renderDialog({ onRegister });

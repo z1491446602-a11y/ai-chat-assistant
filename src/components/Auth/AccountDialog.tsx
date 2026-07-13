@@ -82,30 +82,39 @@ export function AccountDialog({
   const controlsBusy = busy || dialogLocked;
 
   useEffect(() => {
-    if (!open) {
-      setGeneratedCode(null);
-      setActionError('');
-      setPointsError('');
-      setResetPasswordOpen(false);
-      setResetPhone('');
-      setResetRealName('');
-      setResetNewPassword('');
-      setResetPasswordError('');
-      setResetPasswordStatus('');
-      return;
-    }
+    if (open) return;
+
+    setGeneratedCode(null);
+    setActionError('');
+    setPointsError('');
+    setResetPasswordOpen(false);
+    setResetPhone('');
+    setResetRealName('');
+    setResetNewPassword('');
+    setResetPasswordError('');
+    setResetPasswordStatus('');
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
 
     const focusTimer = window.setTimeout(() => firstInputRef.current?.focus(), 0);
+
+    return () => window.clearTimeout(focusTimer);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !dialogLocked) onClose();
     };
     window.addEventListener('keydown', handleKeyDown);
 
     return () => {
-      window.clearTimeout(focusTimer);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [dialogLocked, onClose, open, user]);
+  }, [dialogLocked, onClose, open]);
 
   if (!open) return null;
 
