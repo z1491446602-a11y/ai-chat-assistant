@@ -19,6 +19,8 @@ const IMAGE_COUNT_WITH_UNIT_PATTERN = /\s*([1-9]\d*|[一二三四五六七八九
 const STORYBOARD_LINE_PATTERN = /^\s*(?:第\s*([一二三四五六七八九十两]|[1-9]\d*)\s*张|([1-9]\d*))\s*[.．、:：]\s*(.*)$/u;
 const INLINE_CHINESE_STORYBOARD_PATTERN = /\s+(?=第\s*(?:[一二三四五六七八九十两]|[1-9]\d*)\s*张\s*[.．、:：])/gu;
 const SHARED_REQUIREMENT_PATTERN = /^\s*(?:统一|共同|通用|公共|整体|全部|所有|每张|每一张)(?:图片|图像|画面)?(?:要求|设置|均需|都要|都用|使用|保持|采用)?\s*[:：]/u;
+const SHARED_PROPERTY_VALUE_PATTERN = /^\s*(?:比例|尺寸|画幅|宽高比|风格|背景|光线|色调|构图|分辨率)\s*(?:统一|均|都|全部|一律|共同|一致)(?:设置|设定)?(?:为|采用|使用|是)?\s*[:：]?/u;
+const SHARED_SCOPE_PROPERTY_PATTERN = /^\s*(?:全部|所有|每张|每一张)(?:图片|图像|画面)?(?:的)?\s*(?:比例|尺寸|画幅|宽高比|风格|背景|光线|色调|构图|分辨率)\s*(?:统一|均|都|全部|一律|共同|一致)?(?:设置|设定)?(?:为|采用|使用|是)?\s*[:：]?/u;
 const STANDALONE_ASPECT_RATIO_PATTERN = /^\s*(?:1:1|3:2|2:3|4:3|3:4|16:9|9:16)(?:\s*(?:比例|画幅|横版|竖版|横图|竖图|宽屏))?\s*$/u;
 
 function parseCount(value) {
@@ -72,7 +74,11 @@ export function getImageRequestPrompts(prompt, count = 1) {
       continue;
     }
 
-    if (SHARED_REQUIREMENT_PATTERN.test(line)) {
+    if (
+      SHARED_REQUIREMENT_PATTERN.test(line)
+      || SHARED_PROPERTY_VALUE_PATTERN.test(line)
+      || SHARED_SCOPE_PROPERTY_PATTERN.test(line)
+    ) {
       commonLines.push(line);
       currentItem = null;
       continue;

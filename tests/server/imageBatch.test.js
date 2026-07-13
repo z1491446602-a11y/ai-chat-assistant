@@ -138,6 +138,47 @@ describe('image batch prompt parsing', () => {
     expect(prompts[1]).not.toContain('森林');
   });
 
+  it('applies a trailing ratio phrase to every numbered image request', () => {
+    const descriptions = [
+      '一只橘色小猫蹲在溪边的石头上',
+      '一只黑白花猫趴在溪边的草地上',
+      '一只灰色虎斑猫站在浅水里',
+      '一只白色小猫坐在溪流中央的一块圆石上',
+      '一只黑猫从岸边一跃而起',
+    ];
+    const prompt = [
+      '生成五张图片',
+      ...descriptions.map((description, index) => `第${index + 1}张：${description}`),
+      '比例均为16：9',
+    ].join('\n');
+
+    const prompts = getImageRequestPrompts(prompt, 5);
+
+    prompts.forEach((requestPrompt, index) => {
+      expect(requestPrompt).toContain('比例均为16：9');
+      expect(requestPrompt).toContain(descriptions[index]);
+      descriptions.forEach((description, otherIndex) => {
+        if (otherIndex !== index) expect(requestPrompt).not.toContain(description);
+      });
+    });
+  });
+
+  it.each([
+    '尺寸统一为1536x1024',
+    '风格都为写实',
+    '所有图片比例为3:2',
+    '每张图片光线均为自然光',
+  ])('treats trailing shared constraint "%s" as common to every image', (constraint) => {
+    const prompts = getImageRequestPrompts([
+      '生成2张图片',
+      '第一张：森林',
+      '第二张：海边',
+      constraint,
+    ].join('\n'), 2);
+
+    prompts.forEach(requestPrompt => expect(requestPrompt).toContain(constraint));
+  });
+
   it('reuses the single-image prompt when no numbered storyboard is present', () => {
     expect(getImageRequestPrompts('生成5张城市夜景图片，比例16:9', 5)).toEqual(
       Array(5).fill('生成一张城市夜景图片，比例16:9'),
