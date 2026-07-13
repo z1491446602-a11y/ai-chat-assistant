@@ -496,9 +496,21 @@ export function createAiProviders({
         role: message.role,
         content: Array.isArray(message.content)
           ? message.content
-            .map((item) => item.text || item.image_url || '')
+            .map((item) => {
+              if (item?.type === 'input_text' && item.text) {
+                return { type: 'text', text: item.text };
+              }
+
+              if (item?.type === 'input_image' && item.image_url) {
+                return {
+                  type: 'image_url',
+                  image_url: { url: item.image_url },
+                };
+              }
+
+              return item;
+            })
             .filter(Boolean)
-            .join('\n')
           : message.content,
       });
     }
