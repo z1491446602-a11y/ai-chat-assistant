@@ -25,6 +25,29 @@ describe('upstream transport security', () => {
     });
   });
 
+  it('derives GPT fallback image paths from its configured base URL', () => {
+    useCleanEnv({
+      IMAGE_GPT_FALLBACK_BASE_URL: 'http://fallback.example:8000/',
+      IMAGE_GPT_FALLBACK_API_KEY: 'configured-secret',
+      IMAGE_GPT_FALLBACK_ALLOW_HTTP: 'true',
+    });
+
+    expect(createServerConfig('C:/app')).toMatchObject({
+      IMAGE_GPT_FALLBACK_GENERATION_URL: 'http://fallback.example:8000/v1/images/generations',
+      IMAGE_GPT_FALLBACK_EDIT_URL: 'http://fallback.example:8000/v1/images/edits',
+      IMAGE_GPT_FALLBACK_ALLOW_HTTP: true,
+    });
+  });
+
+  it('requires explicit opt-in before enabling a public HTTP GPT fallback', () => {
+    useCleanEnv({
+      IMAGE_GPT_FALLBACK_BASE_URL: 'http://fallback.example:8000',
+      IMAGE_GPT_FALLBACK_API_KEY: 'configured-secret',
+    });
+
+    expect(() => createServerConfig('C:/app')).toThrow(/IMAGE_GPT_FALLBACK_GENERATION_URL/u);
+  });
+
   it.each([
     ['CHAT_API_KEY', 'CHAT_API_URL', 'http://chat.example.com/v1/responses'],
     ['VIDEO_API_KEY', 'VIDEO_API_URL', 'http://video.example.com/v1/videos'],

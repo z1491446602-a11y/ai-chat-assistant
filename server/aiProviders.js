@@ -1250,10 +1250,11 @@ export function createAiProviders({
     prompt,
     images,
     provider,
+    providerConfigOverride,
     signal,
     onProgress,
   }) {
-    const providerConfig = imageProviderRegistry.resolve(provider);
+    const providerConfig = providerConfigOverride || imageProviderRegistry.resolve(provider);
     const normalizedPrompt = String(prompt || '').trim();
     const sourceImages = Array.isArray(images) ? images.filter(item => typeof item === 'string' && item.trim()) : [];
     const imageRequestTimeoutMs = Number(config.IMAGE_REQUEST_TIMEOUT_MS || 300_000);
@@ -1411,6 +1412,28 @@ export function createAiProviders({
     };
   }
 
+  function shouldUseImageFallback(error) {
+    const message = String(error?.message || error || '');
+    return !/尚未配置|接口地址未配置|Prompt is required/i.test(message)
+      && /图片上游|图片生成请求超时|fetch failed|upstream|rate limit|too many requests|limit reached/i.test(message);
+  }
+
+  async function performSingleImageGenerationWithFallback(args) {
+    try {
+      return await performSingleImageGeneration(args);
+    } catch (primaryError) {
+      const fallbackProvider = imageProviderRegistry.resolveFallback(args.provider);
+      if (!fallbackProvider || !shouldUseImageFallback(primaryError)) {
+        throw primaryError;
+      }
+
+      return performSingleImageGeneration({
+        ...args,
+        providerConfigOverride: fallbackProvider,
+      });
+    }
+  }
+
   async function performImageGeneration({
     prompt,
     images,
@@ -1422,7 +1445,7 @@ export function createAiProviders({
     const requestedCount = Number.isSafeInteger(count) && count > 0 ? count : 1;
     const requestPrompts = getImageRequestPrompts(prompt, requestedCount);
     const outcomes = await Promise.allSettled(requestPrompts.map(
-      requestPrompt => performSingleImageGeneration({
+      requestPrompt => performSingleImageGenerationWithFallback({
         prompt: requestPrompt,
         images,
         provider,

@@ -127,6 +127,19 @@ function isSecureUpstreamUrl(value) {
   return parsed.protocol === 'http:' && isStrictPrivateHttpUrl(value, parsed);
 }
 
+function isExplicitHttpFallbackUrl(name, value, config) {
+  if (!config.IMAGE_GPT_FALLBACK_ALLOW_HTTP || !name.startsWith('IMAGE_GPT_FALLBACK_')) {
+    return false;
+  }
+
+  try {
+    const parsed = new URL(String(value || '').trim());
+    return parsed.protocol === 'http:' && !parsed.username && !parsed.password;
+  } catch {
+    return false;
+  }
+}
+
 function validateUpstreamUrls(config) {
   const upstreamUrls = [
     ['CHAT_API_URL', config.DEFAULT_CHAT_API_URL],
@@ -136,6 +149,8 @@ function validateUpstreamUrls(config) {
     ['IMAGE_API_URL', config.DEFAULT_IMAGE_API_URL],
     ['IMAGE_GPT_GENERATION_URL', config.IMAGE_GPT_GENERATION_URL],
     ['IMAGE_GPT_EDIT_URL', config.IMAGE_GPT_EDIT_URL],
+    ['IMAGE_GPT_FALLBACK_GENERATION_URL', config.IMAGE_GPT_FALLBACK_GENERATION_URL],
+    ['IMAGE_GPT_FALLBACK_EDIT_URL', config.IMAGE_GPT_FALLBACK_EDIT_URL],
     ['IMAGE_GROK_GENERATION_URL', config.IMAGE_GROK_GENERATION_URL],
     ['IMAGE_GROK_EDIT_URL', config.IMAGE_GROK_EDIT_URL],
     ['BOCHA_WEB_SEARCH_API_URL', config.BOCHA_WEB_SEARCH_API_URL],
@@ -144,7 +159,7 @@ function validateUpstreamUrls(config) {
   ];
   const invalidNames = upstreamUrls
     .filter(([, url]) => typeof url === 'string' && url.trim())
-    .filter(([, url]) => !isSecureUpstreamUrl(url))
+    .filter(([name, url]) => !isSecureUpstreamUrl(url) && !isExplicitHttpFallbackUrl(name, url, config))
     .map(([name]) => name);
 
   if (invalidNames.length) {
@@ -161,6 +176,14 @@ export function createServerConfig(rootDir) {
   const legacyImageApiUrl = process.env.IMAGE_API_URL || '';
   const legacyImageApiKey = process.env.IMAGE_API_KEY || '';
   const legacyImageModel = process.env.IMAGE_API_MODEL || 'gpt-image-2';
+  const imageGptFallbackBaseUrl = String(process.env.IMAGE_GPT_FALLBACK_BASE_URL || '')
+    .trim()
+    .replace(/\/+$/u, '');
+  const imageGptFallbackGenerationUrl = process.env.IMAGE_GPT_FALLBACK_GENERATION_URL
+    || (imageGptFallbackBaseUrl ? `${imageGptFallbackBaseUrl}/v1/images/generations` : '');
+  const imageGptFallbackEditUrl = process.env.IMAGE_GPT_FALLBACK_EDIT_URL
+    || (imageGptFallbackBaseUrl ? `${imageGptFallbackBaseUrl}/v1/images/edits` : '');
+  const imageGptFallbackAllowHttp = readBoolean('IMAGE_GPT_FALLBACK_ALLOW_HTTP', false);
   const videoAllowedHosts = (process.env.VIDEO_DOWNLOAD_HOSTS || process.env.VIDEO_ALLOWED_HOSTS || 'opcbucket.oss-cn-beijing.aliyuncs.com')
     .split(',')
     .map(host => host.trim().toLowerCase())
@@ -231,6 +254,12 @@ export function createServerConfig(rootDir) {
     IMAGE_GPT_EDIT_URL: process.env.IMAGE_GPT_EDIT_URL || 'https://api.chancexj.com/v1/images/edits',
     IMAGE_GPT_API_KEY: process.env.IMAGE_GPT_API_KEY || (legacyImageModel === 'gpt-image-2' ? legacyImageApiKey : ''),
     IMAGE_GPT_MODEL: process.env.IMAGE_GPT_MODEL || 'gpt-image-2',
+    IMAGE_GPT_FALLBACK_BASE_URL: imageGptFallbackBaseUrl,
+    IMAGE_GPT_FALLBACK_GENERATION_URL: imageGptFallbackGenerationUrl,
+    IMAGE_GPT_FALLBACK_EDIT_URL: imageGptFallbackEditUrl,
+    IMAGE_GPT_FALLBACK_API_KEY: process.env.IMAGE_GPT_FALLBACK_API_KEY || '',
+    IMAGE_GPT_FALLBACK_MODEL: process.env.IMAGE_GPT_FALLBACK_MODEL || 'gpt-image-2',
+    IMAGE_GPT_FALLBACK_ALLOW_HTTP: imageGptFallbackAllowHttp,
     IMAGE_GROK_GENERATION_URL: process.env.IMAGE_GROK_GENERATION_URL || '',
     IMAGE_GROK_EDIT_URL: process.env.IMAGE_GROK_EDIT_URL || '',
     IMAGE_GROK_API_KEY: process.env.IMAGE_GROK_API_KEY || (legacyImageModel === 'grok-imagine-image-quality' ? legacyImageApiKey : ''),

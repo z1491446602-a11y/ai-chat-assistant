@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createAiProviders } from '../../server/aiProviders.js';
 
-function createProviders(upstreamFetch) {
+function createProviders(upstreamFetch, configOverrides = {}) {
   return createAiProviders({
     upstreamFetch,
     buildFileContextBlocks: () => [],
@@ -19,6 +19,10 @@ function createProviders(upstreamFetch) {
       IMAGE_GROK_GENERATION_URL: '',
       IMAGE_GROK_EDIT_URL: '',
       IMAGE_GROK_MODEL: 'grok-imagine-image-quality',
+      IMAGE_GPT_FALLBACK_API_KEY: '',
+      IMAGE_GPT_FALLBACK_GENERATION_URL: '',
+      IMAGE_GPT_FALLBACK_EDIT_URL: '',
+      IMAGE_GPT_FALLBACK_MODEL: 'gpt-image-2',
       IMAGE_REQUEST_TIMEOUT_MS: 5_000,
       DEFAULT_IMAGE_SIZE: '',
       UPLOAD_DIR: 'unused',
@@ -26,11 +30,57 @@ function createProviders(upstreamFetch) {
       SECOND_VOICECLONE_SAMPLE_PATH: process.cwd() + '/tests/server/aiProviders.imageBatch.test.js',
       VOICE_HISTORY_LIMIT: 6,
       VOICE_MESSAGE_MAX_CHARS: 700,
+      ...configOverrides,
     },
   });
 }
 
 describe('image batch generation', () => {
+  it('falls back to the configured GPT channel after a primary upstream failure', async () => {
+    const upstreamFetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: 'rate limit reached' } }), { status: 429 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ url: 'https://images.example/fallback.png' }] })));
+    const providers = createProviders(upstreamFetch, {
+      IMAGE_GPT_FALLBACK_API_KEY: 'fallback-key',
+      IMAGE_GPT_FALLBACK_GENERATION_URL: 'http://fallback.example/v1/images/generations',
+      IMAGE_GPT_FALLBACK_EDIT_URL: 'http://fallback.example/v1/images/edits',
+      IMAGE_GPT_FALLBACK_MODEL: 'gpt-image-2-fallback',
+    });
+
+    await expect(providers.performImageGeneration({
+      prompt: '生成一张城市夜景图片',
+      provider: 'gpt',
+      count: 1,
+    })).resolves.toMatchObject({
+      images: ['https://images.example/fallback.png'],
+      completedCount: 1,
+      imageProvider: 'gpt',
+      model: 'gpt-image-2-fallback',
+    });
+    expect(upstreamFetch.mock.calls.map(([url]) => url)).toEqual([
+      'https://image.example/generations',
+      'http://fallback.example/v1/images/generations',
+    ]);
+  });
+
+  it('does not bypass upstream safety refusals through the fallback channel', async () => {
+    const upstreamFetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: { message: 'The generated images appear to be unsafe' } }), { status: 400 }),
+    );
+    const providers = createProviders(upstreamFetch, {
+      IMAGE_GPT_FALLBACK_API_KEY: 'fallback-key',
+      IMAGE_GPT_FALLBACK_GENERATION_URL: 'http://fallback.example/v1/images/generations',
+      IMAGE_GPT_FALLBACK_EDIT_URL: 'http://fallback.example/v1/images/edits',
+    });
+
+    await expect(providers.performImageGeneration({
+      prompt: '生成一张图片',
+      provider: 'gpt',
+      count: 1,
+    })).rejects.toThrow('unsafe');
+    expect(upstreamFetch).toHaveBeenCalledTimes(1);
+  });
+
   it('starts all requested upstream image calls concurrently and retains partial successes', async () => {
     const deferred = [];
     const upstreamFetch = vi.fn(() => new Promise(resolve => deferred.push(resolve)));

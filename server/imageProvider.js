@@ -29,6 +29,22 @@ export function createImageProviderRegistry(config) {
       supportsAspectRatio: true,
     },
   };
+  const fallbackProviders = {
+    gpt: config.IMAGE_GPT_FALLBACK_API_KEY
+      && config.IMAGE_GPT_FALLBACK_GENERATION_URL
+      && config.IMAGE_GPT_FALLBACK_EDIT_URL
+      ? {
+        id: 'gpt',
+        label: 'GPT',
+        model: String(config.IMAGE_GPT_FALLBACK_MODEL || providers.gpt.model).trim(),
+        apiKey: String(config.IMAGE_GPT_FALLBACK_API_KEY).trim(),
+        generationUrl: normalizeEndpoint(config.IMAGE_GPT_FALLBACK_GENERATION_URL),
+        editUrl: normalizeEndpoint(config.IMAGE_GPT_FALLBACK_EDIT_URL),
+        editTransport: 'multipart',
+        supportsAspectRatio: false,
+      }
+      : null,
+  };
   const defaultProvider = PROVIDER_IDS.has(config.IMAGE_DEFAULT_PROVIDER)
     ? config.IMAGE_DEFAULT_PROVIDER
     : 'gpt';
@@ -42,7 +58,16 @@ export function createImageProviderRegistry(config) {
     return providers[normalizedId];
   }
 
-  return { resolve, defaultProvider };
+  function resolveFallback(providerId) {
+    const normalizedId = String(providerId || '').trim().toLowerCase();
+    if (!PROVIDER_IDS.has(normalizedId)) {
+      return null;
+    }
+
+    return fallbackProviders[normalizedId] || null;
+  }
+
+  return { resolve, resolveFallback, defaultProvider };
 }
 
 export function buildImageProviderRequest({ provider, prompt, images = [], size = '', aspectRatio = '' }) {

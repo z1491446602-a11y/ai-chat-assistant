@@ -11,12 +11,22 @@ const registry = createImageProviderRegistry({
   IMAGE_GROK_GENERATION_URL: 'https://grok.example/v1/images/generations',
   IMAGE_GROK_EDIT_URL: 'https://grok.example/v1/images/edits',
   IMAGE_GROK_MODEL: 'grok-imagine-image-quality',
+  IMAGE_GPT_FALLBACK_API_KEY: 'fallback-secret',
+  IMAGE_GPT_FALLBACK_GENERATION_URL: 'http://fallback.example/v1/images/generations',
+  IMAGE_GPT_FALLBACK_EDIT_URL: 'http://fallback.example/v1/images/edits',
+  IMAGE_GPT_FALLBACK_MODEL: 'gpt-image-2-fallback',
 });
 
 describe('image provider requests', () => {
   it('uses an exact whitelist and defaults to GPT', () => {
     expect(registry.resolve().id).toBe('gpt');
     expect(registry.resolve('grok').model).toBe('grok-imagine-image-quality');
+    expect(registry.resolveFallback('gpt')).toMatchObject({
+      id: 'gpt',
+      model: 'gpt-image-2-fallback',
+      generationUrl: 'http://fallback.example/v1/images/generations',
+    });
+    expect(registry.resolveFallback('grok')).toBeNull();
     expect(() => registry.resolve('custom')).toThrow('不支持的图片生成模型');
   });
 
