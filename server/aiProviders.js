@@ -3,6 +3,7 @@ import path from 'path';
 import { appendImageRequestSize, extractRequestedImageAspectRatio, resolveImageRequestSize } from './imageSize.js';
 import { buildImageProviderRequest, createImageProviderRegistry } from './imageProvider.js';
 import { getGeneratedImageDimensions } from './imageAssets.js';
+import { getSingleImageRequestPrompt } from './imageBatch.js';
 
 export function createAiProviders({
   upstreamFetch,
@@ -1419,9 +1420,16 @@ export function createAiProviders({
     count = 1,
   }) {
     const requestedCount = Number.isSafeInteger(count) && count > 0 ? count : 1;
+    const singleImagePrompt = getSingleImageRequestPrompt(prompt);
     const outcomes = await Promise.allSettled(Array.from(
       { length: requestedCount },
-      () => performSingleImageGeneration({ prompt, images, provider, signal, onProgress }),
+      () => performSingleImageGeneration({
+        prompt: singleImagePrompt,
+        images,
+        provider,
+        signal,
+        onProgress,
+      }),
     ));
     const successes = outcomes
       .filter(outcome => outcome.status === 'fulfilled')

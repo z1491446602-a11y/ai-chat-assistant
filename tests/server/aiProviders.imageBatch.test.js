@@ -43,6 +43,13 @@ describe('image batch generation', () => {
     });
 
     expect(upstreamFetch).toHaveBeenCalledTimes(5);
+    expect(upstreamFetch.mock.calls.map(([, init]) => JSON.parse(init.body).prompt)).toEqual([
+      '生成一张城市夜景图片',
+      '生成一张城市夜景图片',
+      '生成一张城市夜景图片',
+      '生成一张城市夜景图片',
+      '生成一张城市夜景图片',
+    ]);
     deferred[0](new Response(JSON.stringify({ data: [{ url: 'https://images.example/1.png' }] })));
     deferred[1](new Response(JSON.stringify({ data: [{ url: 'https://images.example/2.png' }] })));
     deferred[2](new Response('', { status: 500 }));
