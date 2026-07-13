@@ -104,6 +104,24 @@ describe('App session synchronization', () => {
     expect(view.queryByText('\u6211\u7684')).toBeNull();
   });
 
+  it('shares sidebar visibility with the AI surface', async () => {
+    vi.useRealTimers();
+    const view = render(<App />);
+
+    await view.findByTestId('ai-chat', {}, { timeout: 3_000 });
+    expect(mocks.aiChatProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sidebarOpen: false }),
+    );
+
+    await act(async () => {
+      view.getByRole('button', { name: '打开侧边栏' }).click();
+    });
+
+    expect(mocks.aiChatProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sidebarOpen: true }),
+    );
+  });
+
   it('syncs immediately and then every four seconds while active', async () => {
     render(<App />);
     await flushPromises();

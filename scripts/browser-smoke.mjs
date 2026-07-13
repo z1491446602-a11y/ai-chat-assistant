@@ -59,6 +59,14 @@ async function evaluate(expression) {
   return result.result.value;
 }
 
+async function captureScreenshot(path) {
+  const screenshot = await send('Page.captureScreenshot', {
+    format: 'png',
+    captureBeyondViewport: false,
+  });
+  await fs.writeFile(path, Buffer.from(screenshot.data, 'base64'));
+}
+
 await send('Page.enable');
 await send('Runtime.enable');
 await send('Emulation.setDeviceMetricsOverride', {
@@ -115,27 +123,84 @@ if (
   throw new Error(`Mobile UI assertion failed: ${JSON.stringify(initial)}`);
 }
 
-const screenshot = await send('Page.captureScreenshot', {
-  format: 'png',
-  captureBeyondViewport: false,
-});
-await fs.writeFile(screenshotPath, Buffer.from(screenshot.data, 'base64'));
+await captureScreenshot(screenshotPath);
+
+const actionScreenshotPath = screenshotPath.replace(/\.png$/i, '-actions.png');
+const sidebarScreenshotPath = screenshotPath.replace(/\.png$/i, '-sidebar.png');
+const providerScreenshotPath = screenshotPath.replace(/\.png$/i, '-provider.png');
+
+const actionMenu = await evaluate(`(() => {
+  document.querySelector('[aria-label="更多操作"]')?.click();
+  return new Promise(resolve => setTimeout(() => {
+    const uploadButton = Array.from(document.querySelectorAll('button'))
+      .find(button => button.textContent?.trim() === '上传图片');
+    const menu = uploadButton?.parentElement;
+    const style = menu ? getComputedStyle(menu) : null;
+    resolve({
+      visible: Boolean(menu && menu.getClientRects().length),
+      backgroundColor: style?.backgroundColor || '',
+      zIndex: style?.zIndex || '',
+    });
+  }, 150));
+})()`);
+
+if (!actionMenu.visible || actionMenu.backgroundColor !== 'rgb(255, 255, 255)' || actionMenu.zIndex !== '40') {
+  throw new Error(`Attachment menu assertion failed: ${JSON.stringify(actionMenu)}`);
+}
+await captureScreenshot(actionScreenshotPath);
 
 const sidebar = await evaluate(`(() => {
   document.querySelector('[aria-label="打开侧边栏"]')?.click();
   return new Promise(resolve => setTimeout(() => resolve({
     closeButton: Boolean(document.querySelector('[aria-label="关闭侧边栏"]')),
     historyVisible: document.body.innerText.includes('历史对话'),
+    attachmentMenuVisible: Array.from(document.querySelectorAll('button'))
+      .some(button => button.textContent?.trim() === '上传图片'),
     accountEntryVisible: document.body.innerText.includes('登录 / 注册')
       || document.body.innerText.includes('我的'),
     overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
   }), 400));
 })()`);
 
-if (!sidebar.closeButton || !sidebar.historyVisible || sidebar.accountEntryVisible || sidebar.overflow) {
+if (!sidebar.closeButton || !sidebar.historyVisible || sidebar.attachmentMenuVisible || sidebar.accountEntryVisible || sidebar.overflow) {
   throw new Error(`Sidebar assertion failed: ${JSON.stringify(sidebar)}`);
 }
+await captureScreenshot(sidebarScreenshotPath);
 
-console.log(JSON.stringify({ initial, sidebar, screenshotPath }));
+const providerMenu = await evaluate(`(() => {
+  document.querySelector('[aria-label="关闭侧边栏"]')?.click();
+  return new Promise(resolve => setTimeout(() => {
+    document.querySelector('[aria-label="选择图片生成模型"]')?.click();
+    setTimeout(() => {
+      const grokButton = Array.from(document.querySelectorAll('button'))
+        .find(button => button.textContent?.trim() === '生成图片-Grok');
+      const menu = grokButton?.parentElement;
+      const style = menu ? getComputedStyle(menu) : null;
+      const selected = menu?.querySelector('[aria-pressed="true"]');
+      resolve({
+        visible: Boolean(menu && menu.getClientRects().length),
+        backgroundColor: style?.backgroundColor || '',
+        zIndex: style?.zIndex || '',
+        selectedLabel: selected?.textContent?.trim() || '',
+      });
+    }, 150);
+  }, 400));
+})()`);
+
+if (!providerMenu.visible || providerMenu.backgroundColor !== 'rgb(255, 255, 255)' || providerMenu.zIndex !== '40' || providerMenu.selectedLabel !== '生成图片-GPT') {
+  throw new Error(`Image provider menu assertion failed: ${JSON.stringify(providerMenu)}`);
+}
+await captureScreenshot(providerScreenshotPath);
+
+console.log(JSON.stringify({
+  initial,
+  actionMenu,
+  sidebar,
+  providerMenu,
+  screenshotPath,
+  actionScreenshotPath,
+  sidebarScreenshotPath,
+  providerScreenshotPath,
+}));
 socket.close();
 await fetch(`http://127.0.0.1:${debugPort}/json/close/${target.id}`);

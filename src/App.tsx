@@ -469,6 +469,7 @@ export function App() {
         <Suspense fallback={<AiSurfaceLoading />}>
           <AiChat
             aiOwner={aiOwner}
+            sidebarOpen={showMenu}
             refreshAiSessions={refreshAiSessions}
           />
         </Suspense>

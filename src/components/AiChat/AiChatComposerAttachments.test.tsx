@@ -55,4 +55,24 @@ describe('AI chat composer actions', () => {
     fireEvent.click(screen.getByRole('button', { name: '生成图片-Grok' }));
     expect(onSelectImageProvider).toHaveBeenCalledWith('grok');
   });
+
+  it('renders attachment popovers as opaque surfaces below navigation overlays', () => {
+    const moreActions = renderComposer({ showMoreActions: true });
+    const moreActionsMenu = moreActions.container.querySelector('.absolute.bottom-12');
+
+    expect(moreActionsMenu?.className).toContain('bg-white');
+    expect(moreActionsMenu?.className).toContain('z-40');
+    expect(moreActionsMenu?.className).not.toContain('bg-white/96');
+    expect(moreActions.container.innerHTML).not.toContain('z-[70]');
+    moreActions.unmount();
+
+    const providers = renderComposer({ showImageProviderMenu: true });
+    const providerMenu = within(providers.container)
+      .getByRole('button', { name: '生成图片-Grok' }).parentElement;
+
+    expect(providerMenu?.className).toContain('bg-white');
+    expect(providerMenu?.className).toContain('z-40');
+    expect(providerMenu?.className).not.toContain('bg-white/96');
+    expect(providers.container.innerHTML).not.toContain('z-[80]');
+  });
 });
