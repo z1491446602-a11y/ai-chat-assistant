@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { parsePointUnits } from '../../server/authRoutes.js';
 import { createServerConfig } from '../../server/config.js';
 
 const originalEnv = { ...process.env };
@@ -188,6 +189,11 @@ async function registerAndGetCookie(harness) {
 }
 
 describe('authentication HTTP routes', () => {
+  it('rejects point amounts above the single-code limit during parsing', () => {
+    expect(parsePointUnits('1000000')).toBe(10_000_000);
+    expect(parsePointUnits('1000000.1')).toBeNull();
+  });
+
   it('registers auth routes with a small parser before the global large parser', () => {
     const authRoutesIndex = serverSource.indexOf('registerAuthRoutes(app');
     const globalParserIndex = serverSource.indexOf("app.use(express.json({ limit: '50mb' }))");
@@ -406,6 +412,29 @@ describe('authentication HTTP routes', () => {
     }
   });
 
+  it('maps a balance overflow during redemption to a fixed Chinese conflict error', async () => {
+    const pointsService = createPointsStub();
+    pointsService.redeemCode = vi.fn(() => {
+      throw Object.assign(new Error('private overflow detail'), {
+        code: 'POINT_BALANCE_LIMIT_EXCEEDED',
+      });
+    });
+    const harness = await startApp({ pointsService });
+    try {
+      const { cookie } = await registerAndGetCookie(harness);
+      const response = await harness.request('/api/points/redeem', {
+        method: 'POST',
+        headers: { Cookie: cookie },
+        body: JSON.stringify({ code: 'Aa1Bb2Cc' }),
+      });
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ error: '积分余额已达上限' });
+    } finally {
+      await harness.close();
+    }
+  });
+
   it('allows only administrators to generate and list masked redeem codes', async () => {
     const authService = createAuthStub();
     authService.seedUser({
@@ -480,10 +509,45 @@ describe('authentication HTTP routes', () => {
           body: JSON.stringify({ points: 1.25 }),
         });
         expect(invalid.status).toBe(422);
-        expect(await invalid.json()).toEqual({ error: '积分必须为正数，且最多保留一位小数' });
+        expect(await invalid.json()).toEqual({
+          error: '积分必须为 0.1 至 1000000，且最多保留一位小数',
+        });
       } finally {
         await adminHarness.close();
       }
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('rejects an over-limit redeem code before calling the points service', async () => {
+    const authService = createAuthStub();
+    authService.seedUser({
+      id: 'admin-1',
+      phone: '13800138000',
+      realName: '管理员',
+      role: 'admin',
+      createdAt: 1,
+    });
+    const pointsService = createPointsStub();
+    const generateRedeemCode = vi.spyOn(pointsService, 'generateRedeemCode');
+    const harness = await startApp({ authService, pointsService });
+    try {
+      const login = await harness.request('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ phone: '13800138000', password: 'password1' }),
+      });
+      const response = await harness.request('/api/admin/redeem-codes', {
+        method: 'POST',
+        headers: { Cookie: cookiePair(login) },
+        body: JSON.stringify({ points: 1_000_000.1 }),
+      });
+
+      expect(response.status).toBe(422);
+      expect(await response.json()).toEqual({
+        error: '积分必须为 0.1 至 1000000，且最多保留一位小数',
+      });
+      expect(generateRedeemCode).not.toHaveBeenCalled();
     } finally {
       await harness.close();
     }

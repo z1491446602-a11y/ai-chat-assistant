@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   MAX_LISTED_REDEEM_CODES,
   MAX_POINT_TRANSACTIONS,
+  MAX_REDEEM_CODE_UNITS,
   MAX_REDEEM_CODE_RECORDS,
   MAX_TERMINAL_POINT_RESERVATIONS,
   MAX_UNUSED_REDEEM_CODES,
@@ -13,6 +14,7 @@ import {
 
 const TEST_REDEEM_SECRET = '0123456789abcdef0123456789abcdef';
 const OTHER_REDEEM_SECRET = 'abcdef0123456789abcdef0123456789';
+const MAX_REDEEM_CODE_UNITS_FOR_TEST = 10_000_000;
 
 function createHarness({
   balanceUnits = 0,
@@ -153,6 +155,93 @@ describe('points service', () => {
     })).toThrowError(expect.objectContaining({ code: 'INVALID_PERSISTED_POINTS' }));
   });
 
+  it('loads legacy over-limit codes but refuses to redeem an unused one', () => {
+    const unusedCodeHash = createHmac('sha256', TEST_REDEEM_SECRET)
+      .update('Aa1Bb2Cc', 'utf8')
+      .digest('hex');
+    const data = {
+      authUsers: { 'user-1': { id: 'user-1', balanceUnits: 0 } },
+      pointReservations: {},
+      pointTransactions: [],
+      redeemCodes: {
+        used: {
+          id: 'used', codeHash: 'a'.repeat(64),
+          units: MAX_REDEEM_CODE_UNITS_FOR_TEST + 1, createdAt: 1_000,
+          usedBy: 'user-1', usedAt: 1_001,
+        },
+        unused: {
+          id: 'unused', codeHash: unusedCodeHash,
+          units: MAX_REDEEM_CODE_UNITS_FOR_TEST + 1, createdAt: 1_000,
+          usedBy: null, usedAt: null,
+        },
+      },
+    };
+    const saveData = vi.fn();
+    const points = createPointsService({
+      data,
+      saveData,
+      redeemCodeHmacSecret: TEST_REDEEM_SECRET,
+    });
+
+    expect(() => points.redeemCode('user-1', 'Aa1Bb2Cc')).toThrowError(
+      expect.objectContaining({ code: 'REDEEM_CODE_POINT_LIMIT_EXCEEDED' }),
+    );
+    expect(data.redeemCodes.unused).toMatchObject({ usedBy: null, usedAt: null });
+    expect(data.authUsers['user-1'].balanceUnits).toBe(0);
+    expect(data.pointTransactions).toEqual([]);
+    expect(saveData).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when active reservations exceed the persisted user balance', () => {
+    const data = {
+      authUsers: { 'user-1': { id: 'user-1', balanceUnits: 2 } },
+      pointReservations: {
+        'task-1': {
+          taskId: 'task-1', userId: 'user-1', costUnits: 1, taskType: 'image',
+          status: 'reserved', success: null, createdAt: 1_000, settledAt: null,
+        },
+        'task-2': {
+          taskId: 'task-2', userId: 'user-1', costUnits: 2, taskType: 'video',
+          status: 'reserved', success: null, createdAt: 1_001, settledAt: null,
+        },
+      },
+      pointTransactions: [],
+      redeemCodes: {},
+    };
+
+    expect(() => createPointsService({
+      data,
+      saveData: vi.fn(),
+      redeemCodeHmacSecret: TEST_REDEEM_SECRET,
+    })).toThrowError(expect.objectContaining({ code: 'INVALID_PERSISTED_POINTS' }));
+  });
+
+  it('accepts active reservations whose total exactly matches the user balance', () => {
+    const data = {
+      authUsers: { 'user-1': { id: 'user-1', balanceUnits: 3 } },
+      pointReservations: {
+        'task-1': {
+          taskId: 'task-1', userId: 'user-1', costUnits: 1, taskType: 'image',
+          status: 'reserved', success: null, createdAt: 1_000, settledAt: null,
+        },
+        'task-2': {
+          taskId: 'task-2', userId: 'user-1', costUnits: 2, taskType: 'video',
+          status: 'reserved', success: null, createdAt: 1_001, settledAt: null,
+        },
+      },
+      pointTransactions: [],
+      redeemCodes: {},
+    };
+
+    const points = createPointsService({
+      data,
+      saveData: vi.fn(),
+      redeemCodeHmacSecret: TEST_REDEEM_SECRET,
+    });
+
+    expect(points.getBalance('user-1')).toEqual({ balanceUnits: 3, availableUnits: 0 });
+  });
+
   it('credits, reserves, and settles integer point units', () => {
     const { points, saveData } = createHarness();
 
@@ -180,6 +269,7 @@ describe('points service', () => {
   it('defines one tenth of a point as one unit and fixed media costs', () => {
     expect(POINT_UNITS_PER_POINT).toBe(10);
     expect(MEDIA_COST_UNITS).toEqual({ gpt: 2, grok: 1, video: 15 });
+    expect(MAX_REDEEM_CODE_UNITS).toBe(MAX_REDEEM_CODE_UNITS_FOR_TEST);
   });
 
   it('reads and mutates only authenticated users', () => {
@@ -192,11 +282,25 @@ describe('points service', () => {
     expect(data.users['user-1'].balanceUnits).toBe(500);
   });
 
-  it.each([0, -1, 1.5, Number.NaN])('rejects invalid credit units: %s', units => {
-    const { points } = createHarness();
-    expect(() => points.credit('user-1', units, 'invalid')).toThrowError(
-      expect.objectContaining({ code: 'INVALID_POINT_UNITS' }),
+  it.each([0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects invalid credit units: %s',
+    units => {
+      const { points } = createHarness();
+      expect(() => points.credit('user-1', units, 'invalid')).toThrowError(
+        expect.objectContaining({ code: 'INVALID_POINT_UNITS' }),
+      );
+    },
+  );
+
+  it('rejects a credit that would overflow the user balance without mutating data', () => {
+    const harness = createHarness({ balanceUnits: Number.MAX_SAFE_INTEGER });
+    const before = JSON.parse(JSON.stringify(harness.data));
+
+    expect(() => harness.points.credit('user-1', 1, 'overflow')).toThrowError(
+      expect.objectContaining({ code: 'POINT_BALANCE_LIMIT_EXCEEDED' }),
     );
+    expect(harness.data).toEqual(before);
+    expect(harness.saveData).not.toHaveBeenCalled();
   });
 
   it('rejects a reservation when available units are insufficient', () => {
@@ -494,11 +598,24 @@ describe('points service', () => {
     });
   });
 
-  it.each([0, -2, 2.5])('requires positive integer redemption units: %s', units => {
-    const { points } = createHarness({ codeFactory: () => 'Aa1Bb2Cc' });
-    expect(() => points.generateRedeemCode(units)).toThrowError(
-      expect.objectContaining({ code: 'INVALID_POINT_UNITS' }),
+  it.each([0, -2, 2.5, Number.MAX_SAFE_INTEGER + 1])(
+    'requires positive safe integer redemption units: %s',
+    units => {
+      const { points } = createHarness({ codeFactory: () => 'Aa1Bb2Cc' });
+      expect(() => points.generateRedeemCode(units)).toThrowError(
+        expect.objectContaining({ code: 'INVALID_POINT_UNITS' }),
+      );
+    },
+  );
+
+  it('rejects a redeem code above the per-code point limit without persisting it', () => {
+    const { data, points, saveData } = createHarness({ codeFactory: () => 'Aa1Bb2Cc' });
+
+    expect(() => points.generateRedeemCode(MAX_REDEEM_CODE_UNITS_FOR_TEST + 1)).toThrowError(
+      expect.objectContaining({ code: 'REDEEM_CODE_POINT_LIMIT_EXCEEDED' }),
     );
+    expect(data.redeemCodes).toEqual({});
+    expect(saveData).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -582,6 +699,25 @@ describe('points service', () => {
     expect(saveData).not.toHaveBeenCalled();
   });
 
+  it('does not let unusable legacy over-limit codes exhaust the active code capacity', () => {
+    const { data, points } = createHarness({ codeFactory: () => 'Aa1Bb2Cc' });
+    for (let index = 0; index < MAX_UNUSED_REDEEM_CODES; index += 1) {
+      data.redeemCodes[`legacy-${index}`] = {
+        id: `legacy-${index}`,
+        codeHash: `legacy-hash-${index}`,
+        units: MAX_REDEEM_CODE_UNITS_FOR_TEST + 1,
+        createdAt: index,
+        usedBy: null,
+        usedAt: null,
+      };
+    }
+
+    const generated = points.generateRedeemCode(1);
+
+    expect(generated).toMatchObject({ code: 'Aa1Bb2Cc', units: 1 });
+    expect(data.redeemCodes[generated.id]).toBeDefined();
+  });
+
   it('prunes the oldest used record before removing unused redeem codes', () => {
     const { data, points } = createHarness({
       codeFactory: () => 'Aa1Bb2Cc',
@@ -656,6 +792,27 @@ describe('points service', () => {
       expect.objectContaining({ code: 'REDEEM_CODE_ALREADY_USED' }),
     );
     expect(points.getBalance('user-1').balanceUnits).toBe(25);
+  });
+
+  it('keeps an overflowing redemption unused and leaves the ledger unchanged', () => {
+    const harness = createHarness({
+      balanceUnits: Number.MAX_SAFE_INTEGER,
+      codeFactory: () => 'Aa1Bb2Cc',
+    });
+    harness.points.generateRedeemCode(1);
+    const before = JSON.parse(JSON.stringify(harness.data));
+    const saveCount = harness.saveData.mock.calls.length;
+
+    expect(() => harness.points.redeemCode('user-1', 'Aa1Bb2Cc')).toThrowError(
+      expect.objectContaining({ code: 'POINT_BALANCE_LIMIT_EXCEEDED' }),
+    );
+    expect(harness.data).toEqual(before);
+    expect(harness.saveData).toHaveBeenCalledTimes(saveCount);
+    expect(() => createPointsService({
+      data: harness.data,
+      saveData: vi.fn(),
+      redeemCodeHmacSecret: TEST_REDEEM_SECRET,
+    })).not.toThrow();
   });
 
   it('generates secure eight-character mixed alphanumeric codes by default', () => {

@@ -1,3 +1,5 @@
+import { MAX_REDEEM_CODE_UNITS } from './pointsService.js';
+
 const DEFAULT_COOKIE_NAME = 'chat_auth';
 const DEFAULT_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1_000;
@@ -16,7 +18,15 @@ const PUBLIC_ERRORS = Object.freeze({
   INVALID_REDEEM_CODE: { status: 422, message: '兑换码无效' },
   REDEEM_CODE_ALREADY_USED: { status: 409, message: '兑换码已被使用' },
   REDEEM_CODE_LIMIT_REACHED: { status: 409, message: '未使用兑换码数量已达上限，请先使用现有码' },
-  INVALID_POINT_UNITS: { status: 422, message: '积分必须为正数，且最多保留一位小数' },
+  REDEEM_CODE_POINT_LIMIT_EXCEEDED: {
+    status: 422,
+    message: '积分必须为 0.1 至 1000000，且最多保留一位小数',
+  },
+  INVALID_POINT_UNITS: {
+    status: 422,
+    message: '积分必须为 0.1 至 1000000，且最多保留一位小数',
+  },
+  POINT_BALANCE_LIMIT_EXCEEDED: { status: 409, message: '积分余额已达上限' },
   INSUFFICIENT_POINTS: { status: 402, message: '积分不足' },
   USER_NOT_FOUND: { status: 401, message: '登录状态已失效，请重新登录' },
   ACCOUNT_IDENTITY_MISMATCH: { status: 404, message: '手机号或真实姓名不匹配' },
@@ -70,7 +80,9 @@ export function parsePointUnits(points) {
   if (!/^(?:0\.[1-9]|[1-9]\d*(?:\.\d)?)$/u.test(normalized)) return null;
 
   const units = Number(normalized) * 10;
-  return Number.isSafeInteger(units) && units > 0 ? units : null;
+  return Number.isSafeInteger(units) && units > 0 && units <= MAX_REDEEM_CODE_UNITS
+    ? units
+    : null;
 }
 
 export function createIpRateLimiter({

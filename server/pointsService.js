@@ -7,6 +7,7 @@ export const MAX_TERMINAL_POINT_RESERVATIONS = 1_000;
 export const MAX_UNUSED_REDEEM_CODES = 1_000;
 export const MAX_REDEEM_CODE_RECORDS = 2_000;
 export const MAX_LISTED_REDEEM_CODES = 200;
+export const MAX_REDEEM_CODE_UNITS = 10_000_000;
 
 const TRANSACTIONAL_COLLECTION_KEYS = Object.freeze([
   'authUsers',
@@ -31,9 +32,18 @@ function createServiceError(message, code) {
 }
 
 function assertPositiveInteger(units) {
-  if (!Number.isInteger(units) || units <= 0) {
+  if (!Number.isSafeInteger(units) || units <= 0) {
     throw createServiceError('Point units must be a positive integer', 'INVALID_POINT_UNITS');
   }
+}
+
+function addBalanceUnits(balanceUnits, units) {
+  const currentBalanceUnits = Number.isSafeInteger(balanceUnits) ? balanceUnits : 0;
+  const nextBalanceUnits = currentBalanceUnits + units;
+  if (!Number.isSafeInteger(nextBalanceUnits)) {
+    throw createServiceError('Point balance limit exceeded', 'POINT_BALANCE_LIMIT_EXCEEDED');
+  }
+  return nextBalanceUnits;
 }
 
 function invalidPersistedPoints(message) {
@@ -57,6 +67,7 @@ function isTimestamp(value) {
 }
 
 function validatePersistedFinancialData(data) {
+  const reservedUnitsByUser = new Map();
   for (const [userKey, user] of Object.entries(data.authUsers)) {
     if (!isRecord(user) || user.id !== userKey) {
       invalidPersistedPoints('Persisted point user identity is invalid');
@@ -81,6 +92,14 @@ function validatePersistedFinancialData(data) {
       invalidPersistedPoints('Persisted point reservation is invalid');
     }
     const isReserved = reservation.status === 'reserved';
+    if (isReserved) {
+      const reservedUnits = (reservedUnitsByUser.get(reservation.userId) || 0)
+        + reservation.costUnits;
+      if (!Number.isSafeInteger(reservedUnits)) {
+        invalidPersistedPoints('Persisted reserved point total is invalid');
+      }
+      reservedUnitsByUser.set(reservation.userId, reservedUnits);
+    }
     if (
       (isReserved && (reservation.success !== null || reservation.settledAt !== null))
       || (!isReserved && (
@@ -95,6 +114,14 @@ function validatePersistedFinancialData(data) {
     const hasMessageId = isNonEmptyString(reservation.messageId);
     if (hasSessionId !== hasMessageId) {
       invalidPersistedPoints('Persisted point reservation link is invalid');
+    }
+  }
+
+  for (const [userId, reservedUnits] of reservedUnitsByUser) {
+    const user = data.authUsers[userId];
+    const balanceUnits = Object.hasOwn(user, 'balanceUnits') ? user.balanceUnits : 0;
+    if (reservedUnits > balanceUnits) {
+      invalidPersistedPoints('Persisted reserved points exceed the user balance');
     }
   }
 
@@ -440,8 +467,9 @@ export function createPointsService({
   function credit(userId, units, reason = 'credit') {
     assertPositiveInteger(units);
     const user = getUser(userId);
+    const nextBalanceUnits = addBalanceUnits(user.balanceUnits, units);
     return persistMutation(() => {
-      user.balanceUnits = (Number.isInteger(user.balanceUnits) ? user.balanceUnits : 0) + units;
+      user.balanceUnits = nextBalanceUnits;
       addTransaction({ type: 'credit', userId: user.id, units, reason: String(reason || 'credit') });
       return getBalance(user.id);
     });
@@ -605,8 +633,19 @@ export function createPointsService({
 
   function generateRedeemCode(units) {
     assertPositiveInteger(units);
+    if (units > MAX_REDEEM_CODE_UNITS) {
+      throw createServiceError(
+        'Redeem code point limit exceeded',
+        'REDEEM_CODE_POINT_LIMIT_EXCEEDED',
+      );
+    }
     const unusedCodeCount = getRedeemCodeRecords()
-      .filter(record => !isRedeemCodeUsed(record))
+      .filter(record => (
+        !isRedeemCodeUsed(record)
+        && Number.isSafeInteger(record?.units)
+        && record.units > 0
+        && record.units <= MAX_REDEEM_CODE_UNITS
+      ))
       .length;
     if (unusedCodeCount >= MAX_UNUSED_REDEEM_CODES) {
       throw createServiceError(
@@ -675,11 +714,18 @@ export function createPointsService({
     if (record.usedAt !== null || record.usedBy !== null) {
       throw createServiceError('Redeem code already used', 'REDEEM_CODE_ALREADY_USED');
     }
+    if (record.units > MAX_REDEEM_CODE_UNITS) {
+      throw createServiceError(
+        'Redeem code point limit exceeded',
+        'REDEEM_CODE_POINT_LIMIT_EXCEEDED',
+      );
+    }
+    const nextBalanceUnits = addBalanceUnits(user.balanceUnits, record.units);
 
     return persistMutation(() => {
       record.usedBy = user.id;
       record.usedAt = now();
-      user.balanceUnits = (Number.isInteger(user.balanceUnits) ? user.balanceUnits : 0) + record.units;
+      user.balanceUnits = nextBalanceUnits;
       addTransaction({
         type: 'credit',
         userId: user.id,
