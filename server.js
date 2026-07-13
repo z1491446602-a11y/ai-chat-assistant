@@ -11,6 +11,7 @@ import { createAiTaskStore } from './server/aiTasks.js';
 import { createAiSessionStore } from './server/aiSessions.js';
 import { createAudioFileStore, getAudioMimeTypeFromPath, normalizeVoiceAudioBuffer } from './server/audioFiles.js';
 import { createServerConfig } from './server/config.js';
+import { registerDailySuggestionsRoute } from './server/dailySuggestions.js';
 import { loadEnvFile } from './server/env.js';
 import { createUpstreamFetch } from './server/httpClient.js';
 import { registerAiRoutes } from './server/aiRoutes.js';
@@ -211,6 +212,7 @@ const {
   appendOptionalImageSize,
   resolveGeneratedImages,
   streamResponse,
+  performChatCompletion,
   performStreamingChatCompletion,
   performVoiceSynthesis,
   ensureVoiceReplyText,
@@ -408,6 +410,8 @@ registerAiRoutes(app, {
   BAIDU_SPEECH_ASR_URL,
   BAIDU_SPEECH_DEV_PID,
 });
+
+registerDailySuggestionsRoute(app, { performChatCompletion });
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: Date.now() });

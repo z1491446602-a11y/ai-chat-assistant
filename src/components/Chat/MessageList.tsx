@@ -11,7 +11,14 @@ interface MessageListProps {
   onSuggestionClick?: (suggestion: string) => void;
 }
 
-const QUICK_SUGGESTIONS = ['写一首诗', '解释量子计算', '帮我写代码'];
+const FALLBACK_SUGGESTIONS = [
+  '总结今天值得关注的国内外新闻',
+  '科技：今天 AI 行业有哪些新进展？',
+  '财经：今天市场有哪些重要变化？',
+  '生活：今天有哪些实用提醒？',
+  '开源社区今天有哪些热门项目？',
+  '帮我快速了解今天的热门话题',
+];
 
 export function MessageList({
   messages,
@@ -23,6 +30,25 @@ export function MessageList({
   const containerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
+  const [dailySuggestions, setDailySuggestions] = useState(FALLBACK_SUGGESTIONS);
+
+  useEffect(() => {
+    if (messages.length) return;
+    const controller = new AbortController();
+    void fetch('/api/daily-suggestions', { signal: controller.signal })
+      .then(async response => {
+        if (!response.ok) throw new Error(`Daily suggestions request failed: ${response.status}`);
+        return response.json();
+      })
+      .then(result => {
+        const suggestions = Array.isArray(result?.suggestions)
+          ? result.suggestions.filter((item: unknown): item is string => typeof item === 'string' && item.trim().length > 0)
+          : [];
+        if (suggestions.length) setDailySuggestions(suggestions.slice(0, 6));
+      })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [messages.length]);
 
   useEffect(() => {
     scrollToBottom();
@@ -57,29 +83,16 @@ export function MessageList({
 
   if (messages.length === 0) {
     return (
-      <div className="flex h-full min-h-full items-start justify-center px-6 pb-10 pt-12 md:items-center md:py-10">
-        <div className="w-full max-w-2xl text-center">
-          <div className="mx-auto mb-6 h-20 w-20 overflow-hidden rounded-3xl bg-gradient-to-br from-sky-100 to-blue-100 shadow-[0_12px_28px_rgba(37,99,235,0.10)]">
-            <img
-              src="/avatar.jpg"
-              alt="人工智障"
-              className="h-full w-full object-cover"
-              loading="lazy"
-            />
-          </div>
-          <h2 className="mb-3 text-[28px] font-semibold tracking-tight text-gray-900">人工智障</h2>
-          <p className="mb-8 text-sm leading-7 text-gray-500">
-            内容由 AI 生成，请注意甄别。
-            <br />
-            支持多轮对话、代码高亮、Markdown、公式、流程图和图片理解。
-          </p>
-          <div className="flex flex-wrap justify-center gap-3">
-            {QUICK_SUGGESTIONS.map((suggestion) => (
+      <div className="h-full min-h-full overflow-y-auto px-4 pb-8 sm:px-6">
+        <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col items-center justify-start pt-20 text-center sm:pt-24 md:justify-center md:pb-16 md:pt-0">
+          <h2 className="mb-8 text-[28px] font-semibold leading-tight text-slate-950 sm:text-[32px]">有什么我能帮你的吗？</h2>
+          <div className="mx-auto flex max-w-4xl flex-wrap justify-center gap-2.5 sm:gap-3">
+            {dailySuggestions.map((suggestion, index) => (
               <button
                 key={suggestion}
                 type="button"
                 onClick={() => onSuggestionClick?.(suggestion)}
-                className="rounded-full border border-sky-100 bg-white/92 px-5 py-2.5 text-sm text-slate-600 transition-all hover:border-sky-300 hover:text-slate-900 hover:shadow-sm active:scale-[0.98]"
+                className={`${index >= 3 ? 'hidden sm:inline-flex' : 'inline-flex'} min-h-11 w-full max-w-sm cursor-pointer items-center justify-center whitespace-normal break-words rounded-xl bg-slate-100 px-4 py-2.5 text-center text-sm leading-5 text-slate-800 transition-colors duration-200 hover:bg-slate-200 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 focus-visible:ring-offset-2 active:bg-slate-300 sm:min-h-12 sm:w-auto sm:max-w-none sm:text-left`}
               >
                 {suggestion}
               </button>

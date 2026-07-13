@@ -84,7 +84,8 @@ let ready = false;
 while (Date.now() < deadline) {
   ready = await evaluate(`document.readyState === 'complete'
     && Boolean(document.querySelector('textarea'))
-    && document.body.innerText.includes('人工智障')`);
+    && document.body.innerText.includes('人工智障')
+    && document.body.innerText.includes('有什么我能帮你的吗？')`);
   if (ready) {
     break;
   }
@@ -98,6 +99,9 @@ const initial = await evaluate(`(() => {
   const root = document.documentElement;
   const bodyText = document.body.innerText;
   const images = Array.from(document.images);
+  const dailyHeading = Array.from(document.querySelectorAll('h2'))
+    .find(heading => heading.textContent?.trim() === '有什么我能帮你的吗？');
+  const dailyButtons = dailyHeading?.nextElementSibling?.querySelectorAll('button') || [];
   return {
     innerWidth: window.innerWidth,
     innerHeight: window.innerHeight,
@@ -106,6 +110,7 @@ const initial = await evaluate(`(() => {
     hasHorizontalOverflow: root.scrollWidth > root.clientWidth,
     hasTextarea: Boolean(document.querySelector('textarea')),
     hasMenuButton: Boolean(document.querySelector('[aria-label="打开侧边栏"]')),
+    dailyTopicCount: dailyButtons.length,
     imagesLoaded: images.every(image => image.complete && image.naturalWidth > 0),
     removedLabels: ['登录 / 注册', '退出登录', '智慧黄科', '添加好友', 'AI 通话'].filter(label => bodyText.includes(label)),
   };
@@ -117,6 +122,7 @@ if (
   || initial.hasHorizontalOverflow
   || !initial.hasTextarea
   || !initial.hasMenuButton
+  || initial.dailyTopicCount < 4
   || !initial.imagesLoaded
   || initial.removedLabels.length
 ) {
