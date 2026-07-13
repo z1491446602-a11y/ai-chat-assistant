@@ -1,6 +1,11 @@
 import fs from 'fs';
 import path from 'path';
-import { appendImageRequestSize, extractRequestedImageAspectRatio, resolveImageRequestSize } from './imageSize.js';
+import {
+  appendImageRequestSize,
+  extractRequestedImageAspectRatio,
+  isHighResolutionImagePrompt,
+  resolveImageRequestSize,
+} from './imageSize.js';
 import { buildImageProviderRequest, createImageProviderRegistry } from './imageProvider.js';
 import { getGeneratedImageDimensions } from './imageAssets.js';
 import { getImageRequestPrompts } from './imageBatch.js';
@@ -1444,11 +1449,15 @@ export function createAiProviders({
   }) {
     const requestedCount = Number.isSafeInteger(count) && count > 0 ? count : 1;
     const requestPrompts = getImageRequestPrompts(prompt, requestedCount);
+    const directFallbackProvider = provider === 'gpt' && isHighResolutionImagePrompt(prompt)
+      ? imageProviderRegistry.resolveFallback(provider)
+      : null;
     const outcomes = await Promise.allSettled(requestPrompts.map(
       requestPrompt => performSingleImageGenerationWithFallback({
         prompt: requestPrompt,
         images,
         provider,
+        providerConfigOverride: directFallbackProvider || undefined,
         signal,
         onProgress,
       }),

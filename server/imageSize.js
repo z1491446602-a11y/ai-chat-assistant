@@ -14,6 +14,14 @@ const COMMON_ASPECT_RATIO_SIZES = new Map([
   ['9:16', '1024x1792'],
 ]);
 
+export function isHighResolutionImagePrompt(prompt) {
+  const text = String(prompt || '').trim();
+  if (!text) return false;
+
+  return /(?:^|[^\d])4\s*k(?:$|[^\d])/iu.test(text)
+    || /(?:4096\s*[x×]\s*\d{3,4}|\d{3,4}\s*[x×]\s*4096|3840\s*[x×]\s*2160|2160\s*[x×]\s*3840)/iu.test(text);
+}
+
 function greatestCommonDivisor(left, right) {
   let a = Math.abs(Math.round(left));
   let b = Math.abs(Math.round(right));

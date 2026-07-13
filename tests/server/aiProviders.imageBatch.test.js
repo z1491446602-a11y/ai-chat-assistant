@@ -63,6 +63,31 @@ describe('image batch generation', () => {
     ]);
   });
 
+  it('routes an explicit 4K request directly to the GPT fallback channel', async () => {
+    const upstreamFetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ data: [{ url: 'https://images.example/4k.png' }] })),
+    );
+    const providers = createProviders(upstreamFetch, {
+      IMAGE_GPT_FALLBACK_API_KEY: 'fallback-key',
+      IMAGE_GPT_FALLBACK_GENERATION_URL: 'http://fallback.example/v1/images/generations',
+      IMAGE_GPT_FALLBACK_EDIT_URL: 'http://fallback.example/v1/images/edits',
+      IMAGE_GPT_FALLBACK_MODEL: 'gpt-image-2-fallback',
+    });
+
+    await expect(providers.performImageGeneration({
+      prompt: '生成一张 4K 超高清城市夜景图片',
+      provider: 'gpt',
+      count: 1,
+    })).resolves.toMatchObject({
+      images: ['https://images.example/4k.png'],
+      imageProvider: 'gpt',
+      model: 'gpt-image-2-fallback',
+    });
+    expect(upstreamFetch.mock.calls.map(([url]) => url)).toEqual([
+      'http://fallback.example/v1/images/generations',
+    ]);
+  });
+
   it('does not bypass upstream safety refusals through the fallback channel', async () => {
     const upstreamFetch = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ error: { message: 'The generated images appear to be unsafe' } }), { status: 400 }),
