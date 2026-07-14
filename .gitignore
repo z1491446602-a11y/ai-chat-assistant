@@ -2,6 +2,7 @@
 node_modules/
 .codex_deps/
 .superpowers/
+.worktrees/
 dydownload-main/
 
 # Build output
