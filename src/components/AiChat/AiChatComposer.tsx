@@ -1,9 +1,10 @@
 import { useEffect, useRef, type ChangeEvent, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
-import { FileText, ImagePlus, LoaderCircle, Mic, Send, Square, Video, X } from 'lucide-react';
-import type { MessageFile } from '@/types';
+import { FileText, LoaderCircle, Mic, Send, Square, X } from 'lucide-react';
+import type { MessageFile, VideoGenerationInputs } from '@/types';
 import type { ImageGenerationProvider } from '@/services/api';
 import { AiChatComposerAttachments } from './AiChatComposerAttachments';
-import { MAX_VIDEO_REFERENCE_IMAGES } from './videoGeneration';
+import { VideoInputPanel } from './VideoInputPanel';
+import type { VideoImageTarget } from './videoGeneration';
 
 interface AiChatComposerProps {
   isStreaming: boolean;
@@ -24,7 +25,7 @@ interface AiChatComposerProps {
   isGeneratingVideoTask: boolean;
   pendingAiImages: string[];
   pendingAiFiles: MessageFile[];
-  pendingAiVideoImages: string[];
+  pendingAiVideoInputs: VideoGenerationInputs;
   imageProviderOptions: readonly { value: ImageGenerationProvider; label: string }[];
   composerRef: RefObject<HTMLTextAreaElement>;
   aiImageInputRef: RefObject<HTMLInputElement>;
@@ -40,7 +41,7 @@ interface AiChatComposerProps {
   onToggleVideoGenerationMode: () => void;
   onRemovePendingAiImage: (index: number) => void;
   onRemovePendingAiFile: (index: number) => void;
-  onRemovePendingAiVideoImage: (index: number) => void;
+  onRemovePendingAiVideoInput: (target: VideoImageTarget, index?: number) => void;
   onPickAiImages: (event: ChangeEvent<HTMLInputElement>) => void;
   onPickAiFiles: (event: ChangeEvent<HTMLInputElement>) => void;
   onPickAiVideoImages: (event: ChangeEvent<HTMLInputElement>) => void;
@@ -51,7 +52,7 @@ interface AiChatComposerProps {
   onOpenMoreActions: () => void;
   onOpenAiImagePicker: () => void;
   onOpenAiFilePicker: () => void;
-  onOpenAiVideoImagePicker: () => void;
+  onOpenAiVideoImagePicker: (target: VideoImageTarget) => void;
   onOpenVoiceRecorder: () => void;
 }
 
@@ -101,15 +102,21 @@ export function AiChatComposer(props: AiChatComposerProps) {
       </div>
     ) : (
       <div className="bg-transparent" onDragOver={event => { if (!busy) event.preventDefault(); }} onDrop={handleDrop}>
-        {(props.pendingAiImages.length || props.pendingAiFiles.length || props.pendingAiVideoImages.length) ? (
+        {(props.pendingAiImages.length || props.pendingAiFiles.length) ? (
           <div className="px-3 pt-3"><div className="mx-auto flex max-w-[980px] gap-2 overflow-x-auto pb-1">
             {props.pendingAiImages.map((url, index) => <div key={`${url}-${index}`} className="relative shrink-0"><img src={url} alt={`待发送图片 ${index + 1}`} className="h-16 w-16 rounded-lg object-cover" /><button type="button" onClick={() => props.onRemovePendingAiImage(index)} className="absolute -right-1 -top-1 rounded-full bg-slate-900 p-1 text-white" aria-label="移除图片"><X className="h-3 w-3" /></button></div>)}
             {props.pendingAiFiles.map((file, index) => <div key={`${file.fileUrl}-${index}`} className="relative flex min-w-[210px] items-center gap-2 rounded-lg border border-sky-100 bg-white px-3 py-2"><FileText className="h-5 w-5 text-sky-700" /><span className="truncate text-sm">{file.fileName}</span><button type="button" onClick={() => props.onRemovePendingAiFile(index)} className="ml-auto" aria-label="移除文件"><X className="h-3 w-3" /></button></div>)}
-            {props.pendingAiVideoImages.map((url, index) => <div key={`${url}-${index}`} className="relative shrink-0"><img src={url} alt={`视频参考图 ${index + 1}`} className="h-16 w-24 rounded-lg object-cover" /><button type="button" onClick={() => props.onRemovePendingAiVideoImage(index)} className="absolute -right-1 -top-1 rounded-full bg-slate-900 p-1 text-white" aria-label="移除参考图"><X className="h-3 w-3" /></button></div>)}
           </div></div>
         ) : null}
         <div className="px-3 pb-2 pt-1"><div className="mx-auto max-w-[980px] rounded-[24px] border border-sky-100 bg-white px-3 py-2 shadow-sm">
-          {props.isVideoGenerationMode ? <div className="mb-2 flex items-center gap-2 border-b border-sky-100 px-2 pb-2 text-xs text-slate-700"><Video className="h-4 w-4" /><span className="flex-1">{props.pendingAiVideoImages.length ? '图生视频' : '文生视频'} · {props.pendingAiVideoImages.length}/{MAX_VIDEO_REFERENCE_IMAGES} 张参考图</span><button type="button" onClick={props.onOpenAiVideoImagePicker} disabled={props.pendingAiVideoImages.length >= MAX_VIDEO_REFERENCE_IMAGES || busy} aria-label="添加视频参考图"><ImagePlus className="h-4 w-4" /></button></div> : null}
+          {props.isVideoGenerationMode ? (
+            <VideoInputPanel
+              inputs={props.pendingAiVideoInputs}
+              busy={busy}
+              onPick={props.onOpenAiVideoImagePicker}
+              onRemove={props.onRemovePendingAiVideoInput}
+            />
+          ) : null}
           <textarea ref={props.composerRef} value={props.input} onChange={event => props.onInputChange(event.target.value)} placeholder={props.placeholder} rows={1} className="block max-h-[168px] min-h-[36px] w-full resize-none bg-transparent px-2 py-1 text-[15px] leading-6 outline-none" onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); props.onSendMessage(); } }} disabled={busy} />
           <div className="mt-1.5 flex min-w-0 items-center justify-between gap-2">
             <AiChatComposerAttachments selectedImageProviderLabel={props.selectedImageProviderLabel} showMoreActions={props.showMoreActions} showImageProviderMenu={props.showImageProviderMenu} imageProviderOptions={props.imageProviderOptions} effectiveImageGenerationMode={props.effectiveImageGenerationMode} isVideoGenerationMode={props.isVideoGenerationMode} isGeneratingVideoTask={props.isGeneratingVideoTask} isUploadingImages={props.isUploadingImages} isUploadingFile={props.isUploadingFile} disabled={props.loading} mediaEnabled={props.mediaEnabled} onRequireLogin={props.onRequireLogin} onToggleImageProviderMenu={props.onToggleImageProviderMenu} onSelectImageProvider={props.onSelectImageProvider} onToggleImageGenerationMode={props.onToggleImageGenerationMode} onToggleVideoGenerationMode={props.onToggleVideoGenerationMode} onOpenMoreActions={props.onOpenMoreActions} onOpenAiImagePicker={props.onOpenAiImagePicker} onOpenAiFilePicker={props.onOpenAiFilePicker} />

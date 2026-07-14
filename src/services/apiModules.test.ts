@@ -47,6 +47,10 @@ function queueNonJsonResponse(body: string | null, status = 502): void {
   }));
 }
 
+function emptyVideoInputs() {
+  return { image: '', lastFrame: '', referenceImages: [] };
+}
+
 beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn());
 });
@@ -89,7 +93,7 @@ const aiTaskOwnerRequestCases: ReadonlyArray<
     }),
   ],
   ['create image task', owner => createServerAiImageTask(owner, null, 'draw', [], 'gpt', 'request-1')],
-  ['create video task', owner => createServerAiVideoTask(owner, null, 'animate', [], 'request-1')],
+  ['create video task', owner => createServerAiVideoTask(owner, null, 'animate', emptyVideoInputs(), 'request-1')],
   ['fetch task', owner => fetchServerAiTask('task-1', owner)],
   ['cancel task', owner => cancelServerAiTask('task-1', owner)],
 ];
@@ -247,7 +251,7 @@ describe('AI task API module', () => {
         { userId: 'user-1' },
         'session-1',
         'animate',
-        [],
+        { image: '', lastFrame: '', referenceImages: [] },
       ]),
     },
   ])('generates one stable requestId for an older $name helper call', async ({ path, request }) => {
@@ -358,7 +362,7 @@ describe('AI task API module', () => {
     )).rejects.toThrow('模型服务额度不足');
   });
 
-  it('keeps the video task path and body unchanged', async () => {
+  it('sends structured Veo inputs without the legacy images field', async () => {
     queueJsonResponse(taskResult);
 
     await expect(
@@ -366,7 +370,11 @@ describe('AI task API module', () => {
         { guestId: 'guest-1' },
         undefined,
         'animate',
-        ['image-1'],
+        {
+          image: 'first-frame',
+          lastFrame: 'last-frame',
+          referenceImages: ['front', 'side', 'back'],
+        },
         'request-video-1',
       ),
     ).resolves.toEqual(taskResult);
@@ -377,7 +385,9 @@ describe('AI task API module', () => {
         guestId: 'guest-1',
         sessionId: undefined,
         prompt: 'animate',
-        images: ['image-1'],
+        image: 'first-frame',
+        lastFrame: 'last-frame',
+        referenceImages: ['front', 'side', 'back'],
         requestId: 'request-video-1',
       }),
     });
@@ -401,7 +411,7 @@ describe('AI task API module', () => {
         { userId: 'user-1' },
         'session-1',
         'animate',
-        [],
+        emptyVideoInputs(),
         requestId,
       ),
     },
@@ -440,7 +450,7 @@ describe('AI task API module', () => {
         { userId: 'user-1' },
         'session-1',
         'animate',
-        [],
+        emptyVideoInputs(),
         'request-video-failure',
       ),
     },
@@ -469,7 +479,7 @@ describe('AI task API module', () => {
         { userId: 'user-1' },
         'session-1',
         'animate',
-        [],
+        emptyVideoInputs(),
         'request-video-http',
       ),
     },
@@ -498,7 +508,7 @@ describe('AI task API module', () => {
         { userId: 'user-1' },
         'session-1',
         'animate',
-        [],
+        emptyVideoInputs(),
         '',
       ),
     },
@@ -581,7 +591,7 @@ describe('AI API non-JSON errors', () => {
       name: 'create video task',
       body: '<html>bad gateway</html>',
       fallback: '提交视频生成任务失败',
-      request: () => createServerAiVideoTask('user-1', null, 'animate', [], 'request-video-error'),
+      request: () => createServerAiVideoTask('user-1', null, 'animate', emptyVideoInputs(), 'request-video-error'),
     },
     {
       name: 'fetch task',

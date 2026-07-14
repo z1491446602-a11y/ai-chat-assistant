@@ -6,7 +6,7 @@ import { getRequestedImageCount } from './imageBatch.js';
 import { MEDIA_COST_UNITS } from './pointsService.js';
 import { toPublicAiErrorMessage } from './publicAiErrors.js';
 import { normalizeImageReferenceList } from './imageReferences.js';
-import { MAX_VIDEO_REFERENCE_IMAGES } from './videoProvider.js';
+import { MAX_VIDEO_REFERENCE_IMAGES, VEO_FAST_DURATION_SECONDS } from './videoProvider.js';
 import { MAX_VIDEO_PROMPT_LENGTH } from './videoJobs.js';
 
 export const GUEST_OPERATION_WINDOW_MS = 60_000;
@@ -478,29 +478,63 @@ export function registerAiRoutes(app, deps) {
     return /\p{Script=Han}/u.test(message) ? message : fallback;
   }
 
-  function validateVideoReferenceImages(input) {
+  function validateVideoImage(input, label) {
+    const source = String(input || '').trim();
+    if (!source) return '';
+    const match = source.match(videoImageDataUrlPattern);
+    if (!match) {
+      throw new Error(`${label}只支持 PNG、JPEG 或 WebP 图片`);
+    }
+    const buffer = Buffer.from(match[2], 'base64');
+    if (!buffer.length) {
+      throw new Error(`${label}内容为空`);
+    }
+    if (buffer.length > videoReferenceMaxBytes) {
+      throw new Error(`${label}不能超过 10 MB`);
+    }
+    return source;
+  }
+
+  function validateVideoReferenceImages(input = []) {
     if (!Array.isArray(input)) {
-      throw new Error('参考图必须是数组');
+      throw new Error('角色参考图必须是数组');
     }
     if (input.length > MAX_VIDEO_REFERENCE_IMAGES) {
-      throw new Error(`最多上传 ${MAX_VIDEO_REFERENCE_IMAGES} 张参考图`);
+      throw new Error(`最多上传 ${MAX_VIDEO_REFERENCE_IMAGES} 张角色参考图`);
+    }
+    return input.map(item => validateVideoImage(item, '角色参考图'));
+  }
+
+  function normalizeVideoInputs(body = {}) {
+    const hasLegacyImages = Object.prototype.hasOwnProperty.call(body, 'images');
+    const hasExplicitInputs = ['image', 'lastFrame', 'referenceImages']
+      .some(key => Object.prototype.hasOwnProperty.call(body, key));
+    if (hasLegacyImages && hasExplicitInputs) {
+      throw new Error('旧版图片参数不能与首帧、尾帧或角色参考图同时使用');
     }
 
-    return input.map((item) => {
-      const source = String(item || '').trim();
-      const match = source.match(videoImageDataUrlPattern);
-      if (!match) {
-        throw new Error('参考图只支持 PNG、JPEG 或 WebP data URL');
-      }
-      const buffer = Buffer.from(match[2], 'base64');
-      if (!buffer.length) {
-        throw new Error('参考图内容为空');
-      }
-      if (buffer.length > videoReferenceMaxBytes) {
-        throw new Error('单张参考图不能超过 10 MB');
-      }
-      return source;
-    });
+    if (hasLegacyImages) {
+      const legacyImages = validateVideoReferenceImages(body.images);
+      return {
+        image: legacyImages.length === 1 ? legacyImages[0] : '',
+        lastFrame: '',
+        referenceImages: legacyImages.length > 1 ? legacyImages : [],
+        durationSeconds: VEO_FAST_DURATION_SECONDS,
+      };
+    }
+
+    const image = validateVideoImage(body.image, '首帧');
+    const lastFrame = validateVideoImage(body.lastFrame, '尾帧');
+    const referenceImages = validateVideoReferenceImages(body.referenceImages);
+    if (lastFrame && !image) {
+      throw new Error('添加尾帧前请先添加首帧');
+    }
+    return {
+      image,
+      lastFrame,
+      referenceImages,
+      durationSeconds: VEO_FAST_DURATION_SECONDS,
+    };
   }
 
   function persistMediaTaskSession({
@@ -1098,24 +1132,29 @@ export function registerAiRoutes(app, deps) {
 
     const existingSession = findAiSession(ownerLookup.ownerRef, req.body.sessionId);
 
-    let images;
+    let videoInputs;
     try {
-      images = validateVideoReferenceImages(req.body.images);
+      videoInputs = normalizeVideoInputs(req.body);
     } catch (error) {
       return res.status(400).json({
-        error: toPublicValidationMessage(error, '参考图格式不正确'),
+        error: toPublicValidationMessage(error, '视频图片格式不正确'),
       });
     }
+    const { image, lastFrame, referenceImages, durationSeconds } = videoInputs;
+    const displayImages = [image, lastFrame, ...referenceImages].filter(Boolean);
 
     const mediaClaim = claimMediaRequest({
       ownerLookup,
       mediaType: 'video',
       requestId: getCompatibleMediaRequestId(req.body.requestId),
       payloadFingerprint: createMediaPayloadFingerprint({
-        version: 1,
+        version: 2,
         sessionId: String(req.body.sessionId || '').trim(),
         prompt,
-        images,
+        image,
+        lastFrame,
+        referenceImages,
+        durationSeconds,
       }),
     });
     if (mediaClaim.claimError) {
@@ -1151,7 +1190,7 @@ export function registerAiRoutes(app, deps) {
         taskId,
         type: 'video',
         prompt,
-        images,
+        images: displayImages,
       });
       const {
         session,
@@ -1172,7 +1211,10 @@ export function registerAiRoutes(app, deps) {
         status: 'pending',
         error: '',
         prompt,
-        images,
+        image,
+        lastFrame,
+        referenceImages,
+        durationSeconds,
         videoStage: 'submitting',
         createdAt: now,
         updatedAt: now,

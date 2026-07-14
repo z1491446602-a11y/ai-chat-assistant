@@ -49,6 +49,7 @@ interface RenderActionsOptions {
   effectiveImageGenerationMode?: boolean;
   isVideoGenerationMode?: boolean;
   enabled?: boolean;
+  videoInputs?: { image: string; lastFrame: string; referenceImages: string[] };
 }
 
 function renderActions(aiOwner: AiTaskOwner, options: RenderActionsOptions = {}) {
@@ -79,14 +80,14 @@ function renderActions(aiOwner: AiTaskOwner, options: RenderActionsOptions = {})
     input: options.input || '',
     pendingAiImages: [],
     pendingAiFiles: [],
-    pendingAiVideoImages: [],
+    pendingAiVideoInputs: options.videoInputs || { image: '', lastFrame: '', referenceImages: [] },
     selectedImageProvider: 'gpt',
     effectiveImageGenerationMode: options.effectiveImageGenerationMode || false,
     isVideoGenerationMode: options.isVideoGenerationMode || false,
     setInput: vi.fn(),
     setPendingAiImages: vi.fn(),
     setPendingAiFiles: vi.fn(),
-    setPendingAiVideoImages: vi.fn(),
+    setPendingAiVideoInputs: vi.fn(),
     setShowMoreActions: vi.fn(),
     setShowImageProviderMenu: vi.fn(),
     setIsImageGenerationMode: vi.fn(),
@@ -267,7 +268,7 @@ describe('useAiChatActions owner wire contract', () => {
         owner,
         session.id,
         'Generate media',
-        [],
+        { image: '', lastFrame: '', referenceImages: [] },
         'request-default',
       );
     }

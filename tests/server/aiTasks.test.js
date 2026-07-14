@@ -107,6 +107,33 @@ function createTask(id, type, ownerId) {
 }
 
 describe('AI media task scheduling', () => {
+  it.each([
+    ['用户余额不足', '视频服务额度暂不可用，本次未扣积分，请联系管理员。'],
+    ['Download error', '上游视频结果获取失败，本次未扣积分，请稍后重试。'],
+    ['Video generation timed out', '视频生成等待超时，本次未扣积分，请稍后重试。'],
+  ])('classifies the provider failure %s without charging points', async (providerError, publicError) => {
+    const settleMediaTask = vi.fn();
+    const videoProvider = {
+      submit: vi.fn().mockResolvedValue({ id: 'upstream-video', status: 'queued' }),
+      poll: vi.fn().mockRejectedValue(new Error(providerError)),
+    };
+    const { store, sessions, patches } = createHarness({
+      scheduler: createMediaTaskScheduler({ maxConcurrent: 1 }),
+      videoProvider,
+      settleMediaTask,
+    });
+    const task = createTask(`video-failure-${providerError}`, 'video', 'owner-a');
+    task.videoStage = 'submitting';
+    sessions.set(task.sessionId, { id: task.sessionId, messages: [] });
+    store.registerAiTask(task);
+
+    await store.runAiTask(task.id);
+
+    expect(store.getAiTask(task.id)).toMatchObject({ status: 'failed', error: publicError });
+    expect(patches.at(-1)?.patch).toMatchObject({ content: publicError, status: 'error' });
+    expect(settleMediaTask).toHaveBeenCalledWith(task.id, false);
+  });
+
   it('uses task-local input for the current chat message and releases it after completion', async () => {
     const inputImage = 'data:image/png;base64,AA==';
     const performStreamingChatCompletion = vi.fn().mockResolvedValue({

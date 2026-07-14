@@ -29,7 +29,7 @@ describe('video server config', () => {
     expect(config.VIDEO_API_KEY).toBe('');
     expect(config.VIDEO_API_MODEL).toBe('veo_3_1_fast');
     expect(config.VIDEO_POLL_INTERVAL_MS).toBe(10_000);
-    expect(config.VIDEO_TIMEOUT_MS).toBe(600_000);
+    expect(config.VIDEO_TIMEOUT_MS).toBe(1_800_000);
     expect(config.VIDEO_MAX_BYTES).toBe(209_715_200);
     expect(config.VIDEO_ALLOWED_HOSTS).toEqual(['opcbucket.oss-cn-beijing.aliyuncs.com']);
     expect(config.VIDEO_DOWNLOAD_HOSTS).toEqual(['opcbucket.oss-cn-beijing.aliyuncs.com']);

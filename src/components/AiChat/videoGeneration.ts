@@ -1,10 +1,22 @@
-import type { VideoGenerationStage } from '@/types';
+import type { VideoGenerationInputs, VideoGenerationStage } from '@/types';
 
 export const MAX_VIDEO_REFERENCE_IMAGES = 3;
 export const MAX_VIDEO_REFERENCE_BYTES = 10 * 1024 * 1024;
 export const VIDEO_REFERENCE_ACCEPT = 'image/png,image/jpeg,image/webp';
 
 const VIDEO_REFERENCE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
+
+export type VideoImageTarget = keyof VideoGenerationInputs;
+
+export function createEmptyVideoGenerationInputs(): VideoGenerationInputs {
+  return { image: '', lastFrame: '', referenceImages: [] };
+}
+
+export function getVideoGenerationImageCount(inputs: VideoGenerationInputs): number {
+  return Number(Boolean(inputs.image))
+    + Number(Boolean(inputs.lastFrame))
+    + inputs.referenceImages.length;
+}
 
 export const VIDEO_STAGE_LABELS: Record<VideoGenerationStage, string> = {
   submitting: '正在提交视频任务',
@@ -14,12 +26,18 @@ export const VIDEO_STAGE_LABELS: Record<VideoGenerationStage, string> = {
   validating: '正在验证并保存视频',
 };
 
-export function validateVideoReferenceFiles(files: File[], currentCount: number): File[] {
-  if (currentCount + files.length > MAX_VIDEO_REFERENCE_IMAGES) {
+export function validateVideoInputFiles(
+  files: File[],
+  target: VideoImageTarget,
+  currentReferenceCount: number,
+): File[] {
+  const selectedFiles = target === 'referenceImages' ? files : files.slice(0, 1);
+  if (target === 'referenceImages'
+    && currentReferenceCount + selectedFiles.length > MAX_VIDEO_REFERENCE_IMAGES) {
     throw new Error('视频参考图最多添加 3 张');
   }
 
-  for (const file of files) {
+  for (const file of selectedFiles) {
     if (!VIDEO_REFERENCE_MIME_TYPES.has(file.type)) {
       throw new Error('参考图仅支持 PNG、JPEG 或 WebP');
     }
@@ -28,11 +46,11 @@ export function validateVideoReferenceFiles(files: File[], currentCount: number)
     }
   }
 
-  return files;
+  return selectedFiles;
 }
 
 export async function compressVideoReferenceImage(file: File): Promise<string> {
-  validateVideoReferenceFiles([file], 0);
+  validateVideoInputFiles([file], 'image', 0);
   const source = await loadImage(await readFileAsDataUrl(file));
   const scale = Math.min(1, 1600 / Math.max(source.naturalWidth, source.naturalHeight));
   const width = Math.max(1, Math.round(source.naturalWidth * scale));

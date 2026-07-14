@@ -24,14 +24,17 @@
 {
   model: 'veo_3_1_fast',
   prompt: '角色转身',
-  durationSeconds: 8,
   image: { image_url: 'data:image/jpeg;base64,...' },
   lastFrame: { image_url: 'data:image/jpeg;base64,...' },
   referenceImages: [
-    { image_url: 'data:image/jpeg;base64,...' },
+    'data:image/jpeg;base64,...',
   ],
 }
 ```
+
+`durationSeconds: 8` 只作为本站内部约束。chancexj 实测要求
+`referenceImages` 为 data URL 字符串数组，且不需要把时长字段转发给中转层；
+对象数组会触发上游 Java 反序列化 502。
 
 - [ ] **Step 2: Run the focused test and confirm the old `images` mapping fails**
 

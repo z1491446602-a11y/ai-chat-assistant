@@ -913,22 +913,84 @@ describe('AI route ownership and media billing', () => {
     expect(requestRecord.requestId).toMatch(/^media_request-/);
   });
 
-  it('accepts three video reference images for an authenticated user', async () => {
+  it('accepts distinct first, last, and three subject-reference images', async () => {
     const { baseUrl, pointsService } = await createRouteHarness();
-    const images = [
+    const referenceImages = [
       'data:image/png;base64,AA==',
       'data:image/jpeg;base64,AQ==',
       'data:image/webp;base64,Ag==',
     ];
+    const image = 'data:image/png;base64,Aw==';
+    const lastFrame = 'data:image/jpeg;base64,BA==';
 
     const response = await postJson(baseUrl, '/api/ai-task/video', {
       prompt: '使用三张参考图生成视频',
-      images,
+      image,
+      lastFrame,
+      referenceImages,
     }, 'signed-in-user');
 
     expect(response.status).toBe(200);
-    expect((await response.json()).task.images).toEqual(images);
+    expect((await response.json()).task).toMatchObject({
+      image,
+      lastFrame,
+      referenceImages,
+      durationSeconds: 8,
+    });
     expect(pointsService.reserve).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a last frame without a first frame and more than three subject references', async () => {
+    const { baseUrl, pointsService } = await createRouteHarness();
+    const tailOnly = await postJson(baseUrl, '/api/ai-task/video', {
+      prompt: '尾帧不能单独使用',
+      lastFrame: 'data:image/png;base64,AA==',
+      referenceImages: [],
+    }, 'signed-in-user');
+    expect(tailOnly.status).toBe(400);
+    expect(await tailOnly.json()).toEqual({ error: '添加尾帧前请先添加首帧' });
+
+    const excessReferences = await postJson(baseUrl, '/api/ai-task/video', {
+      prompt: '参考图过多',
+      referenceImages: Array.from({ length: 4 }, () => 'data:image/png;base64,AA=='),
+    }, 'signed-in-user');
+    expect(excessReferences.status).toBe(400);
+    expect(await excessReferences.json()).toEqual({ error: '最多上传 3 张角色参考图' });
+    expect(pointsService.reserve).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['one legacy image as the first frame', ['data:image/png;base64,AA=='], {
+      image: 'data:image/png;base64,AA==', referenceImages: [],
+    }],
+    ['multiple legacy images as subject references', [
+      'data:image/png;base64,AA==', 'data:image/jpeg;base64,AQ==',
+    ], {
+      image: '',
+      referenceImages: ['data:image/png;base64,AA==', 'data:image/jpeg;base64,AQ=='],
+    }],
+  ])('maps %s for old clients', async (_label, images, expected) => {
+    const { baseUrl } = await createRouteHarness();
+    const response = await postJson(baseUrl, '/api/ai-task/video', {
+      prompt: '旧客户端兼容', images,
+    }, 'signed-in-user');
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).task).toMatchObject({
+      ...expected, lastFrame: '', durationSeconds: 8,
+    });
+  });
+
+  it('rejects mixing legacy images with explicit video input fields', async () => {
+    const { baseUrl } = await createRouteHarness();
+    const response = await postJson(baseUrl, '/api/ai-task/video', {
+      prompt: '字段不能混用',
+      images: ['data:image/png;base64,AA=='],
+      image: 'data:image/png;base64,AQ==',
+    }, 'signed-in-user');
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: '旧版图片参数不能与首帧、尾帧或角色参考图同时使用' });
   });
 
   it('claims an image session before asynchronous reference reads so concurrent submissions conflict', async () => {
@@ -1075,16 +1137,18 @@ describe('AI route ownership and media billing', () => {
 
   it('keeps video data URLs task-local while persisting a recoverable video job', async () => {
     const { baseUrl, data, tasks } = await createRouteHarness({ useRealStores: true });
-    const inputImage = 'data:image/png;base64,AA==';
+    const image = 'data:image/png;base64,AA==';
+    const referenceImages = ['data:image/jpeg;base64,AQ=='];
 
     const response = await postJson(baseUrl, '/api/ai-task/video', {
       prompt: '让图片动起来',
-      images: [inputImage],
+      image,
+      referenceImages,
     }, 'signed-in-user');
     const result = await response.json();
 
     expect(response.status).toBe(200);
-    expect(tasks.get(result.task.id)?.images).toEqual([inputImage]);
+    expect(tasks.get(result.task.id)).toMatchObject({ image, referenceImages });
     const persistedSession = data.aiSessions['signed-in-user'][0];
     expect(persistedSession.messages[0].images).toBeUndefined();
     expect(data.videoJobs[result.task.id]).toMatchObject({

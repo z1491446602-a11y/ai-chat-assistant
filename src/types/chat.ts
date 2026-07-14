@@ -6,6 +6,12 @@ export type VideoGenerationStage = 'submitting' | 'queued' | 'processing' | 'dow
 
 export type ImageGenerationStage = 'submitting' | 'generating' | 'receiving' | 'persisting';
 
+export interface VideoGenerationInputs {
+  image: string;
+  lastFrame: string;
+  referenceImages: string[];
+}
+
 export interface MessageFile {
   fileName: string;
   fileUrl: string;

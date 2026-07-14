@@ -1,4 +1,4 @@
-import type { APIConfig, MessageFile, Session } from '@/types';
+import type { APIConfig, MessageFile, Session, VideoGenerationInputs } from '@/types';
 import { createHttpError, readJsonResult } from './http';
 
 export type ImageGenerationProvider = 'gpt' | 'grok';
@@ -304,7 +304,7 @@ export async function createServerAiVideoTask(
   owner: string | AiTaskOwner,
   sessionId: string | null | undefined,
   prompt: string,
-  images: string[],
+  inputs: VideoGenerationInputs,
   requestId?: string,
 ): Promise<{ task: ServerAiTask; sessionId: string; messageId: string }> {
   const normalizedOwner = normalizeAiTaskOwner(owner);
@@ -316,7 +316,9 @@ export async function createServerAiVideoTask(
       ...normalizedOwner.body,
       sessionId,
       prompt,
-      images,
+      image: inputs.image,
+      lastFrame: inputs.lastFrame,
+      referenceImages: inputs.referenceImages,
       requestId: normalizedRequestId,
     }),
   }, '视频请求失败，请稍后重试');

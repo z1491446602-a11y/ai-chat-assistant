@@ -6,28 +6,53 @@ import {
 } from '../../server/videoProvider.js';
 
 describe('video provider payloads', () => {
-  it('builds exact payloads for zero, one, two, and three images', () => {
-    expect(buildVideoRequestBody({ model: 'veo', prompt: 'go', images: [] }))
-      .toEqual({ model: 'veo', prompt: 'go' });
-    expect(buildVideoRequestBody({ model: 'veo', prompt: 'go', images: ['https://a/1.png'] }))
-      .toEqual({ model: 'veo', prompt: 'go', image: { image_url: 'https://a/1.png' } });
-    expect(buildVideoRequestBody({ model: 'veo', prompt: 'go', images: ['https://a/1.png', 'https://a/2.png'] }))
+  it('keeps text, first frame, last frame, and subject references in distinct fields', () => {
+    expect(buildVideoRequestBody({ model: 'veo', prompt: 'go' })).toEqual({
+      model: 'veo', prompt: 'go',
+    });
+    expect(buildVideoRequestBody({ model: 'veo', prompt: 'go', image: 'https://a/first.png' }))
       .toEqual({
-        model: 'veo',
-        prompt: 'go',
-        images: [{ image_url: 'https://a/1.png' }, { image_url: 'https://a/2.png' }],
+        model: 'veo', prompt: 'go',
+        image: { image_url: 'https://a/first.png' },
       });
-    expect(buildVideoRequestBody({ model: 'veo', prompt: 'go', images: ['https://a/1.png', 'https://a/2.png', 'https://a/3.png'] }))
-      .toEqual({
-        model: 'veo',
-        prompt: 'go',
-        images: [{ image_url: 'https://a/1.png' }, { image_url: 'https://a/2.png' }, { image_url: 'https://a/3.png' }],
-      });
+    expect(buildVideoRequestBody({
+      model: 'veo', prompt: 'go', image: 'https://a/first.png', lastFrame: 'https://a/last.png',
+    })).toEqual({
+      model: 'veo', prompt: 'go',
+      image: { image_url: 'https://a/first.png' },
+      lastFrame: { image_url: 'https://a/last.png' },
+    });
+    expect(buildVideoRequestBody({
+      model: 'veo',
+      prompt: 'go',
+      referenceImages: ['https://a/front.png', 'https://a/side.png', 'https://a/back.png'],
+    })).toEqual({
+      model: 'veo',
+      prompt: 'go',
+      referenceImages: ['https://a/front.png', 'https://a/side.png', 'https://a/back.png'],
+    });
+    expect(buildVideoRequestBody({
+      model: 'veo',
+      prompt: 'go',
+      image: 'https://a/storyboard.png',
+      referenceImages: ['https://a/character.png'],
+    })).toEqual({
+      model: 'veo',
+      prompt: 'go',
+      image: { image_url: 'https://a/storyboard.png' },
+      referenceImages: ['https://a/character.png'],
+    });
   });
 
-  it('rejects an empty prompt and more than three images', () => {
-    expect(() => buildVideoRequestBody({ model: 'veo', prompt: ' ', images: [] })).toThrow(/prompt/i);
-    expect(() => buildVideoRequestBody({ model: 'veo', prompt: 'go', images: ['1', '2', '3', '4'] })).toThrow('at most 3 images');
+  it('rejects invalid prompts, durations, tail-only input, and excess references', () => {
+    expect(() => buildVideoRequestBody({ model: 'veo', prompt: ' ' })).toThrow(/prompt/i);
+    expect(() => buildVideoRequestBody({ model: 'veo', prompt: 'go', durationSeconds: 6 }))
+      .toThrow('8 seconds');
+    expect(() => buildVideoRequestBody({ model: 'veo', prompt: 'go', lastFrame: 'last' }))
+      .toThrow('first frame');
+    expect(() => buildVideoRequestBody({
+      model: 'veo', prompt: 'go', referenceImages: ['1', '2', '3', '4'],
+    })).toThrow('at most 3 reference images');
   });
 });
 
@@ -52,13 +77,16 @@ describe('createVideoProvider', () => {
       apiUrl: 'https://api.example/v1/videos', apiKey: 'secret', model: 'veo', fetchImpl,
     });
 
-    await expect(provider.submit({ prompt: 'go', images: [] })).resolves.toEqual({
+    await expect(provider.submit({ prompt: 'go' })).resolves.toEqual({
       id: 'up-1', upstreamTaskId: 'up-1', status: 'queued',
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(fetchImpl.mock.calls[0][1].headers).toEqual({
       'Content-Type': 'application/json',
       'x-api-key': 'secret',
+    });
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toEqual({
+      model: 'veo', prompt: 'go',
     });
   });
 

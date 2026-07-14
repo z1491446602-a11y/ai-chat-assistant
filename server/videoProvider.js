@@ -1,25 +1,53 @@
 const PUBLIC_STATUSES = new Set(['queued', 'processing', 'completed', 'failed']);
 export const MAX_VIDEO_REFERENCE_IMAGES = 3;
+export const VEO_FAST_DURATION_SECONDS = 8;
 
-function normalizeImages(images) {
-  if (images == null) return [];
-  if (!Array.isArray(images)) throw new Error('Video images must be an array');
-  return images.map(image => String(image || '').trim()).filter(Boolean);
+function normalizeImage(image) {
+  return String(image || '').trim();
 }
 
-export function buildVideoRequestBody({ model, prompt, images = [] }) {
+function normalizeReferenceImages(referenceImages) {
+  if (referenceImages == null) return [];
+  if (!Array.isArray(referenceImages)) throw new Error('Video reference images must be an array');
+  return referenceImages.map(normalizeImage).filter(Boolean);
+}
+
+export function buildVideoRequestBody({
+  model,
+  prompt,
+  image = '',
+  lastFrame = '',
+  referenceImages = [],
+  durationSeconds = VEO_FAST_DURATION_SECONDS,
+}) {
   const normalizedPrompt = String(prompt || '').trim();
-  const normalizedImages = normalizeImages(images);
+  const normalizedImage = normalizeImage(image);
+  const normalizedLastFrame = normalizeImage(lastFrame);
+  const normalizedReferenceImages = normalizeReferenceImages(referenceImages);
   if (!normalizedPrompt) throw new Error('Video prompt is required');
-  if (normalizedImages.length > MAX_VIDEO_REFERENCE_IMAGES) {
-    throw new Error(`Video generation supports at most ${MAX_VIDEO_REFERENCE_IMAGES} images`);
+  if (Number(durationSeconds) !== VEO_FAST_DURATION_SECONDS) {
+    throw new Error('Veo 3.1 Fast reference video generation requires 8 seconds');
+  }
+  if (normalizedLastFrame && !normalizedImage) {
+    throw new Error('Video last frame requires a first frame');
+  }
+  if (normalizedReferenceImages.length > MAX_VIDEO_REFERENCE_IMAGES) {
+    throw new Error(`Video generation supports at most ${MAX_VIDEO_REFERENCE_IMAGES} reference images`);
   }
 
-  const body = { model: String(model || '').trim(), prompt: normalizedPrompt };
-  if (normalizedImages.length === 1) {
-    body.image = { image_url: normalizedImages[0] };
-  } else if (normalizedImages.length > 1) {
-    body.images = normalizedImages.map(image_url => ({ image_url }));
+  const body = {
+    model: String(model || '').trim(),
+    prompt: normalizedPrompt,
+  };
+  if (normalizedImage) {
+    body.image = { image_url: normalizedImage };
+  }
+  if (normalizedLastFrame) {
+    body.lastFrame = { image_url: normalizedLastFrame };
+  }
+  if (normalizedReferenceImages.length) {
+    // chancexj expects data-URL strings here; object entries fail upstream deserialization.
+    body.referenceImages = normalizedReferenceImages;
   }
   return body;
 }
@@ -84,7 +112,7 @@ export function createVideoProvider({
   apiKey,
   model = 'veo_3_1_fast',
   pollIntervalMs = 10_000,
-  timeoutMs = 600_000,
+  timeoutMs = 1_800_000,
   fetchImpl = globalThis.fetch,
   sleep = delay => new Promise(resolve => setTimeout(resolve, delay)),
   now = Date.now,
@@ -92,11 +120,25 @@ export function createVideoProvider({
   const baseUrl = String(apiUrl || '').replace(/\/+$/, '');
   const headers = { 'Content-Type': 'application/json', 'x-api-key': String(apiKey || '') };
 
-  async function submit({ prompt, images = [], signal } = {}) {
+  async function submit({
+    prompt,
+    image = '',
+    lastFrame = '',
+    referenceImages = [],
+    durationSeconds = VEO_FAST_DURATION_SECONDS,
+    signal,
+  } = {}) {
     const response = await fetchImpl(baseUrl, {
       method: 'POST',
       headers,
-      body: JSON.stringify(buildVideoRequestBody({ model, prompt, images })),
+      body: JSON.stringify(buildVideoRequestBody({
+        model,
+        prompt,
+        image,
+        lastFrame,
+        referenceImages,
+        durationSeconds,
+      })),
       signal,
     });
     const payload = await readJson(response);

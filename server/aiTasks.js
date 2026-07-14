@@ -362,6 +362,9 @@ export function createAiTaskStore({
     delete task.apiKey;
     delete task.prompt;
     delete task.images;
+    delete task.image;
+    delete task.lastFrame;
+    delete task.referenceImages;
     delete task.inputMessage;
   }
 
@@ -603,8 +606,15 @@ export function createAiTaskStore({
   }
 
   function getVideoFailureText(task, error) {
-    if (/timed out|超时/i.test(String(error?.message || ''))) {
-      return '视频状态查询超时，请联系管理员继续核查。';
+    const message = String(error?.message || '');
+    if (/余额不足|insufficient\s+(balance|credit)|quota\s+exceeded/i.test(message)) {
+      return '视频服务额度暂不可用，本次未扣积分，请联系管理员。';
+    }
+    if (/download\s+error|result\s+download|结果下载/i.test(message)) {
+      return '上游视频结果获取失败，本次未扣积分，请稍后重试。';
+    }
+    if (/timed out|超时/i.test(message)) {
+      return '视频生成等待超时，本次未扣积分，请稍后重试。';
     }
     if (task.videoStage === 'submitting') {
       return '视频任务提交失败，请稍后重试。';
@@ -834,10 +844,19 @@ export function createAiTaskStore({
         } else {
           let upstreamVideoUrl = '';
           if (!task.upstreamTaskId) {
-            console.log('[video-task] submitting', JSON.stringify({ taskId: task.id, promptLen: (task.prompt || '').length, imageCount: Array.isArray(task.images) ? task.images.length : 0 }));
+            console.log('[video-task] submitting', JSON.stringify({
+              taskId: task.id,
+              promptLen: (task.prompt || '').length,
+              hasFirstFrame: Boolean(task.image),
+              hasLastFrame: Boolean(task.lastFrame),
+              referenceImageCount: Array.isArray(task.referenceImages) ? task.referenceImages.length : 0,
+            }));
             const submitted = await videoProvider.submit({
               prompt: task.prompt,
-              images: task.images,
+              image: task.image,
+              lastFrame: task.lastFrame,
+              referenceImages: task.referenceImages,
+              durationSeconds: task.durationSeconds,
             });
             console.log('[video-task] submit result', JSON.stringify({ taskId: task.id, upstreamTaskId: submitted.id, status: submitted.status, hasVideoUrl: Boolean(submitted.videoUrl) }));
             throwIfCancelled(task, controller);

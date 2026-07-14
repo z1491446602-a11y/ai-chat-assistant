@@ -10,7 +10,8 @@ import {
 } from '@/services/api';
 import { isUnauthorizedError } from '@/services/http';
 import { useSettingsStore } from '@/store';
-import type { APIConfig, MessageFile, Session } from '@/types';
+import type { APIConfig, MessageFile, Session, VideoGenerationInputs } from '@/types';
+import { createEmptyVideoGenerationInputs } from './videoGeneration';
 
 interface UseAiChatActionsParams {
   enabled: boolean;
@@ -28,14 +29,14 @@ interface UseAiChatActionsParams {
   input: string;
   pendingAiImages: string[];
   pendingAiFiles: MessageFile[];
-  pendingAiVideoImages: string[];
+  pendingAiVideoInputs: VideoGenerationInputs;
   selectedImageProvider: ImageGenerationProvider;
   effectiveImageGenerationMode: boolean;
   isVideoGenerationMode: boolean;
   setInput: Dispatch<SetStateAction<string>>;
   setPendingAiImages: Dispatch<SetStateAction<string[]>>;
   setPendingAiFiles: Dispatch<SetStateAction<MessageFile[]>>;
-  setPendingAiVideoImages: Dispatch<SetStateAction<string[]>>;
+  setPendingAiVideoInputs: Dispatch<SetStateAction<VideoGenerationInputs>>;
   setShowMoreActions: Dispatch<SetStateAction<boolean>>;
   setShowImageProviderMenu: Dispatch<SetStateAction<boolean>>;
   setIsImageGenerationMode: Dispatch<SetStateAction<boolean>>;
@@ -58,14 +59,14 @@ export function useAiChatActions({
   input,
   pendingAiImages,
   pendingAiFiles,
-  pendingAiVideoImages,
+  pendingAiVideoInputs,
   selectedImageProvider,
   effectiveImageGenerationMode,
   isVideoGenerationMode,
   setInput,
   setPendingAiImages,
   setPendingAiFiles,
-  setPendingAiVideoImages,
+  setPendingAiVideoInputs,
   setShowMoreActions,
   setShowImageProviderMenu,
   setIsImageGenerationMode,
@@ -75,7 +76,7 @@ export function useAiChatActions({
     setInput('');
     setPendingAiImages([]);
     setPendingAiFiles([]);
-    setPendingAiVideoImages([]);
+    setPendingAiVideoInputs(createEmptyVideoGenerationInputs());
     setShowMoreActions(false);
     setShowImageProviderMenu(false);
     setIsImageGenerationMode(false);
@@ -174,14 +175,14 @@ export function useAiChatActions({
     void syncServerAiSessions(result.sessionId);
   };
 
-  const submitAiVideoGeneration = async (prompt: string, images: string[] = []) => {
+  const submitAiVideoGeneration = async (prompt: string, inputs: VideoGenerationInputs) => {
     const sessionId = await resolveSessionId('veo_3_1_fast');
     const requestId = createClientRequestId();
 
     setStreaming(true, null);
     let result;
     try {
-      result = await createServerAiVideoTask(aiOwner, sessionId, prompt, images, requestId);
+      result = await createServerAiVideoTask(aiOwner, sessionId, prompt, inputs, requestId);
     } catch (error) {
       await resetStreamingState(!isUnauthorizedError(error));
       throw error;
@@ -204,7 +205,10 @@ export function useAiChatActions({
     const rawContent = input.trim();
     const images = [...pendingAiImages];
     const files = [...pendingAiFiles];
-    const videoImages = [...pendingAiVideoImages];
+    const videoInputs = {
+      ...pendingAiVideoInputs,
+      referenceImages: [...pendingAiVideoInputs.referenceImages],
+    };
     const shouldGenerateImage = effectiveImageGenerationMode;
 
     if (isVideoGenerationMode && !rawContent) {
@@ -220,7 +224,7 @@ export function useAiChatActions({
 
     try {
       if (isVideoGenerationMode) {
-        await submitAiVideoGeneration(rawContent, videoImages);
+        await submitAiVideoGeneration(rawContent, videoInputs);
         return;
       }
 

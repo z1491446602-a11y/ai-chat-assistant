@@ -215,7 +215,7 @@ export function createServerConfig(rootDir) {
     VIDEO_API_KEY: process.env.VIDEO_API_KEY || '',
     VIDEO_API_MODEL: process.env.VIDEO_API_MODEL || 'veo_3_1_fast',
     VIDEO_POLL_INTERVAL_MS: Number(process.env.VIDEO_POLL_INTERVAL_MS || 10_000),
-    VIDEO_TIMEOUT_MS: Number(process.env.VIDEO_TIMEOUT_MS || 600_000),
+    VIDEO_TIMEOUT_MS: Number(process.env.VIDEO_TIMEOUT_MS || 1_800_000),
     VIDEO_MAX_BYTES: Number(process.env.VIDEO_MAX_BYTES || 209_715_200),
     VIDEO_ALLOWED_HOSTS: videoAllowedHosts,
     VIDEO_DOWNLOAD_HOSTS: videoAllowedHosts,
