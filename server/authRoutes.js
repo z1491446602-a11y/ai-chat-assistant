@@ -317,6 +317,21 @@ export function registerAuthRoutes(app, dependencies = {}) {
     res.json({ user: withPoints(req.authUser) });
   }));
 
+  app.get('/api/points/transactions', requireLogin, asyncRoute(async (req, res) => {
+    const transactions = pointsService.listTransactions(req.authUser.id).map(transaction => ({
+      id: transaction.id,
+      type: transaction.type,
+      points: transaction.units / 10,
+      costPoints: transaction.costUnits / 10,
+      taskType: transaction.taskType,
+      reason: transaction.reason,
+      balance: transaction.balanceUnits / 10,
+      availablePoints: transaction.availableUnits / 10,
+      createdAt: transaction.createdAt,
+    }));
+    res.json({ transactions });
+  }));
+
   app.post('/api/admin/redeem-codes', requireAdmin, asyncRoute(async (req, res) => {
     const units = parsePointUnits(req.body?.points);
     if (units === null) {

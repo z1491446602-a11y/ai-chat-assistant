@@ -41,6 +41,7 @@ function renderDialog(patch: Partial<ComponentProps<typeof AccountDialog>> = {})
     onRegister: vi.fn(),
     onLogout: vi.fn(),
     onRedeem: vi.fn(),
+    onLoadTransactions: vi.fn().mockResolvedValue([]),
     onGenerateCode: vi.fn<() => Promise<GeneratedRedeemCode>>(),
     onResetPassword: vi.fn(),
     ...patch,
@@ -131,6 +132,8 @@ describe('AccountDialog', () => {
     expect(screen.getByText('13800138000')).toBeTruthy();
     expect(screen.getByLabelText('总积分').textContent).toContain('20');
     expect(screen.getByLabelText('可用积分').textContent).toContain('18');
+    expect(screen.getByRole('tab', { name: '个人信息' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('tab', { name: '使用记录' }).getAttribute('aria-selected')).toBe('false');
     expect(screen.queryByRole('heading', { name: '生成兑换码' })).toBeNull();
     expect(screen.queryByRole('button', { name: '重置用户密码' })).toBeNull();
 
@@ -140,6 +143,45 @@ describe('AccountDialog', () => {
 
     expect(onRedeem).toHaveBeenCalledWith('Ab12Cd34');
     expect(onLogout).toHaveBeenCalledTimes(1);
+  });
+
+  it('loads and displays the signed-in user usage records on demand', async () => {
+    const onLoadTransactions = vi.fn().mockResolvedValue([
+      {
+        id: 'point-video',
+        type: 'debit',
+        points: -1.5,
+        costPoints: 1.5,
+        taskType: 'video',
+        reason: null,
+        balance: 16.5,
+        availablePoints: 16.5,
+        createdAt: 1_700_000_000_000,
+      },
+      {
+        id: 'point-redeem',
+        type: 'credit',
+        points: 10,
+        costPoints: 0,
+        taskType: null,
+        reason: 'redeem',
+        balance: 18,
+        availablePoints: 18,
+        createdAt: 1_699_000_000_000,
+      },
+    ]);
+    renderDialog({ user: member, onLoadTransactions });
+    const interaction = userEvent.setup();
+
+    expect(onLoadTransactions).not.toHaveBeenCalled();
+    await interaction.click(screen.getByRole('tab', { name: '使用记录' }));
+
+    expect(onLoadTransactions).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText('视频生成')).toBeTruthy();
+    expect(screen.getByText('-1.5 积分')).toBeTruthy();
+    expect(screen.getByText('兑换码到账')).toBeTruthy();
+    expect(screen.getByText('+10 积分')).toBeTruthy();
+    expect(screen.queryByLabelText('兑换码')).toBeNull();
   });
 
   it('lets an admin generate a positive decimal points code and shows only the latest code', async () => {
@@ -277,6 +319,7 @@ describe('AccountDialog', () => {
           onLogin={vi.fn()}
           onLogout={vi.fn()}
           onRedeem={vi.fn()}
+          onLoadTransactions={vi.fn().mockResolvedValue([])}
           onRegister={vi.fn()}
           onResetPassword={async () => setCurrentUser(null)}
           open
@@ -316,7 +359,7 @@ describe('AccountDialog', () => {
     const { container } = renderDialog({ user: admin });
     const dialog = screen.getByRole('dialog');
 
-    expect(dialog.className).toContain('w-[calc(100%-2rem)]');
+    expect(dialog.className).toContain('w-full');
     expect(dialog.className).toContain('max-h-[calc(100dvh-2rem)]');
     expect(dialog.className).toContain('rounded-lg');
     expect(dialog.querySelectorAll('.shadow-xl')).toHaveLength(0);

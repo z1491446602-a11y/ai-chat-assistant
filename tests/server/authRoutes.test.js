@@ -118,6 +118,20 @@ function createPointsStub() {
     listMaskedCodes() {
       return codes;
     },
+    listTransactions(userId) {
+      return [{
+        id: 'point-1',
+        type: 'debit',
+        units: -15,
+        costUnits: 15,
+        taskType: 'video',
+        reason: null,
+        balanceUnits: 85,
+        availableUnits: 85,
+        createdAt: 1_700_000_000_000,
+        userId,
+      }];
+    },
   };
 }
 
@@ -406,6 +420,40 @@ describe('authentication HTTP routes', () => {
       expect(redeemed.status).toBe(200);
       expect(await redeemed.json()).toMatchObject({
         user: { id: 'user-1', points: 2.5, availablePoints: 2.5 },
+      });
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('returns only the authenticated user point activity with public point values', async () => {
+    const pointsService = createPointsStub();
+    const listTransactions = vi.spyOn(pointsService, 'listTransactions');
+    const harness = await startApp({ pointsService });
+    try {
+      const anonymous = await harness.request('/api/points/transactions');
+      expect(anonymous.status).toBe(401);
+      expect(listTransactions).not.toHaveBeenCalled();
+
+      const { cookie } = await registerAndGetCookie(harness);
+      const response = await harness.request('/api/points/transactions', {
+        headers: { Cookie: cookie },
+      });
+
+      expect(response.status).toBe(200);
+      expect(listTransactions).toHaveBeenCalledWith('user-1');
+      expect(await response.json()).toEqual({
+        transactions: [{
+          id: 'point-1',
+          type: 'debit',
+          points: -1.5,
+          costPoints: 1.5,
+          taskType: 'video',
+          reason: null,
+          balance: 8.5,
+          availablePoints: 8.5,
+          createdAt: 1_700_000_000_000,
+        }],
       });
     } finally {
       await harness.close();

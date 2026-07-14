@@ -18,6 +18,7 @@ import { getAiOwner } from '@/utils/aiOwner';
 import {
   adminResetPassword,
   fetchCurrentUser,
+  fetchPointTransactions,
   generateRedeemCode,
   login as loginAccount,
   logout as logoutAccount,
@@ -744,6 +745,7 @@ export function App() {
             onRegister={handleRegister}
             onLogout={handleLogout}
             onRedeem={handleRedeem}
+            onLoadTransactions={fetchPointTransactions}
             onGenerateCode={handleGenerateCode}
             onResetPassword={handleAdminResetPassword}
           />

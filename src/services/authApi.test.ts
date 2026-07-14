@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'v
 import {
   adminResetPassword,
   fetchCurrentUser,
+  fetchPointTransactions,
   fetchRedeemCodes,
   generateRedeemCode,
   login,
@@ -13,6 +14,7 @@ import type {
   AdminResetPasswordInput,
   AdminResetPasswordResult,
   AuthUser,
+  PointTransactionRecord,
   RedeemCodeRecord,
 } from './authApi';
 import { subscribeToSessionExpired } from './http';
@@ -129,6 +131,27 @@ describe('auth API', () => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ code: 'Ab12Cd34' }),
+    });
+  });
+
+  it('loads the signed-in user point activity', async () => {
+    const transactions: PointTransactionRecord[] = [{
+      id: 'point-1',
+      type: 'debit',
+      points: -1.5,
+      costPoints: 1.5,
+      taskType: 'video',
+      reason: null,
+      balance: 8.5,
+      availablePoints: 8.5,
+      createdAt: 1_700_000_000_000,
+    }];
+    fetchMock().mockResolvedValueOnce(jsonResponse({ transactions }));
+
+    await expect(fetchPointTransactions()).resolves.toEqual(transactions);
+    expect(fetchMock()).toHaveBeenCalledWith('/api/points/transactions', {
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json' },
     });
   });
 

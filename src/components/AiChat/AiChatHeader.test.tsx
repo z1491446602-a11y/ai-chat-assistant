@@ -35,6 +35,8 @@ describe('AiChatHeader', () => {
 
     expect(screen.getByRole('button', { name: '账户，当前可用 1.8 积分' })).toBeTruthy();
     expect(screen.getByText('1.8 积分')).toBeTruthy();
+    expect(screen.getByText('测试用户')).toBeTruthy();
+    expect(screen.getByText('测')).toBeTruthy();
     expect(container.querySelector('header')?.className).toContain('justify-center');
   });
 

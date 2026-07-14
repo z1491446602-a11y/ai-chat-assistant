@@ -1,6 +1,7 @@
 import {
   ChevronDown,
   CircleUserRound,
+  History,
   KeyRound,
   LogIn,
   LogOut,
@@ -17,8 +18,10 @@ import type {
   AuthUser,
   GeneratedRedeemCode,
   LoginInput,
+  PointTransactionRecord,
   RegisterInput,
 } from '@/services/authApi';
+import { AccountUsageHistory } from './AccountUsageHistory';
 
 type ActionResult = void | Promise<void>;
 
@@ -31,6 +34,7 @@ export interface AccountDialogProps {
   onRegister: (input: RegisterInput) => ActionResult;
   onLogout: () => ActionResult;
   onRedeem: (code: string) => ActionResult;
+  onLoadTransactions: () => Promise<PointTransactionRecord[]>;
   onGenerateCode: (points: number) => GeneratedRedeemCode | Promise<GeneratedRedeemCode>;
   onResetPassword: (input: AdminResetPasswordInput) => ActionResult;
 }
@@ -50,6 +54,7 @@ export function AccountDialog({
   onRegister,
   onLogout,
   onRedeem,
+  onLoadTransactions,
   onGenerateCode,
   onResetPassword,
 }: AccountDialogProps) {
@@ -60,6 +65,10 @@ export function AccountDialog({
   const registerTabId = useId();
   const resetPasswordPanelId = useId();
   const resetPasswordWarningId = useId();
+  const profileTabId = useId();
+  const historyTabId = useId();
+  const profilePanelId = useId();
+  const historyPanelId = useId();
   const firstInputRef = useRef<HTMLInputElement>(null);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [phone, setPhone] = useState('');
@@ -78,6 +87,11 @@ export function AccountDialog({
   const [resetPasswordStatus, setResetPasswordStatus] = useState('');
   const [actionError, setActionError] = useState('');
   const [pointsError, setPointsError] = useState('');
+  const [accountSection, setAccountSection] = useState<'profile' | 'history'>('profile');
+  const [transactions, setTransactions] = useState<PointTransactionRecord[] | null>(null);
+  const [transactionsLoading, setTransactionsLoading] = useState(false);
+  const [transactionsError, setTransactionsError] = useState('');
+  const [transactionsReloadKey, setTransactionsReloadKey] = useState(0);
   const dialogLocked = isGeneratingCode || isResettingPassword;
   const controlsBusy = busy || dialogLocked;
 
@@ -93,7 +107,39 @@ export function AccountDialog({
     setResetNewPassword('');
     setResetPasswordError('');
     setResetPasswordStatus('');
+    setAccountSection('profile');
+    setTransactions(null);
+    setTransactionsLoading(false);
+    setTransactionsError('');
   }, [open]);
+
+  useEffect(() => {
+    setAccountSection('profile');
+    setTransactions(null);
+    setTransactionsError('');
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!open || !user || accountSection !== 'history') return;
+
+    let cancelled = false;
+    setTransactionsLoading(true);
+    setTransactionsError('');
+    void onLoadTransactions()
+      .then(result => {
+        if (!cancelled) setTransactions(result);
+      })
+      .catch(error => {
+        if (!cancelled) setTransactionsError(errorMessage(error));
+      })
+      .finally(() => {
+        if (!cancelled) setTransactionsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accountSection, onLoadTransactions, open, transactionsReloadKey, user]);
 
   useEffect(() => {
     if (!open) return;
@@ -150,7 +196,11 @@ export function AccountDialog({
     event.preventDefault();
     const code = redeemValue.trim();
     if (!code) return;
-    void runAction(() => onRedeem(code));
+    void runAction(async () => {
+      await onRedeem(code);
+      setRedeemValue('');
+      setTransactions(null);
+    });
   };
 
   const handleGenerateSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -213,13 +263,15 @@ export function AccountDialog({
       <section
         aria-labelledby={titleId}
         aria-modal="true"
-        className="w-[calc(100%-2rem)] max-w-md max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-lg border border-slate-200 bg-white text-slate-900 shadow-2xl"
+        className="w-full max-w-lg max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-lg border border-slate-200 bg-white text-slate-900 shadow-2xl"
         role="dialog"
       >
         <header className="flex min-h-16 items-center justify-between border-b border-slate-200 px-4 sm:px-5">
           <div className="flex min-w-0 items-center gap-3">
-            <CircleUserRound aria-hidden="true" className="h-5 w-5 shrink-0 text-sky-600" />
-            <h2 className="truncate text-base font-semibold" id={titleId}>账户</h2>
+            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-sky-600 text-white shadow-sm">
+              <CircleUserRound aria-hidden="true" className="h-5 w-5" />
+            </span>
+            <h2 className="truncate text-base font-semibold" id={titleId}>{user ? '个人中心' : '账户'}</h2>
           </div>
           <button
             aria-label="关闭账户窗口"
@@ -234,11 +286,45 @@ export function AccountDialog({
 
         {user ? (
           <div>
+            <div aria-label="个人中心" className="grid grid-cols-2 border-b border-slate-200 bg-slate-50/80 p-1" role="tablist">
+              <button
+                aria-controls={profilePanelId}
+                aria-selected={accountSection === 'profile'}
+                className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-md px-3 text-sm font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-inset focus:ring-sky-500 ${accountSection === 'profile' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:bg-white/70 hover:text-slate-900'}`}
+                id={profileTabId}
+                onClick={() => setAccountSection('profile')}
+                role="tab"
+                type="button"
+              >
+                <CircleUserRound aria-hidden="true" className="h-4 w-4" />
+                个人信息
+              </button>
+              <button
+                aria-controls={historyPanelId}
+                aria-selected={accountSection === 'history'}
+                className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-md px-3 text-sm font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-inset focus:ring-sky-500 ${accountSection === 'history' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:bg-white/70 hover:text-slate-900'}`}
+                id={historyTabId}
+                onClick={() => setAccountSection('history')}
+                role="tab"
+                type="button"
+              >
+                <History aria-hidden="true" className="h-4 w-4" />
+                使用记录
+              </button>
+            </div>
+
+            {accountSection === 'profile' ? (
+              <div aria-labelledby={profileTabId} id={profilePanelId} role="tabpanel">
             <div className="px-4 py-5 sm:px-5">
               <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
+                <div className="flex min-w-0 items-center gap-3">
+                  <span aria-hidden="true" className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-sky-100 text-base font-bold text-sky-700">
+                    {user.realName.trim().slice(0, 1) || '我'}
+                  </span>
+                  <span className="min-w-0">
                   <p className="truncate text-base font-semibold text-slate-900">{user.realName}</p>
                   <p className="mt-1 truncate text-sm text-slate-600">{user.phone}</p>
+                  </span>
                 </div>
                 {user.role === 'admin' && (
                   <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-sky-50 px-2 py-1 text-xs font-semibold text-sky-700">
@@ -249,7 +335,7 @@ export function AccountDialog({
               </div>
             </div>
 
-            <dl className="grid grid-cols-2 border-y border-slate-200 bg-slate-50">
+            <dl className="grid grid-cols-2 border-y border-slate-200 bg-slate-50/80">
               <div aria-label="总积分" className="px-4 py-3 sm:px-5">
                 <dt className="text-xs text-slate-600">总积分</dt>
                 <dd className="mt-1 text-lg font-semibold tabular-nums text-slate-900">
@@ -265,6 +351,10 @@ export function AccountDialog({
             </dl>
 
             <div className="px-4 py-5 sm:px-5">
+              <div className="mb-3 flex items-center gap-2">
+                <TicketCheck aria-hidden="true" className="h-4 w-4 text-sky-600" />
+                <h3 className="text-sm font-semibold text-slate-900">兑换积分</h3>
+              </div>
               <form className="space-y-3" onSubmit={handleRedeemSubmit}>
                 <div>
                   <label className="mb-1.5 block text-sm font-medium text-slate-700" htmlFor="account-redeem-code">
@@ -426,6 +516,22 @@ export function AccountDialog({
                     </form>
                   )}
                 </div>
+              </div>
+            )}
+              </div>
+            ) : (
+              <div
+                aria-labelledby={historyTabId}
+                className="px-4 py-4 sm:px-5"
+                id={historyPanelId}
+                role="tabpanel"
+              >
+                <AccountUsageHistory
+                  error={transactionsError}
+                  loading={transactionsLoading}
+                  onRetry={() => setTransactionsReloadKey(value => value + 1)}
+                  transactions={transactions}
+                />
               </div>
             )}
 

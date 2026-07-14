@@ -40,6 +40,7 @@ const mocks = vi.hoisted(() => {
     deleteServerAiSession: vi.fn(),
     clearServerAiSessions: vi.fn(),
     fetchCurrentUser: vi.fn(),
+    fetchPointTransactions: vi.fn(),
     login: vi.fn(),
     register: vi.fn(),
     logout: vi.fn(),
@@ -60,6 +61,7 @@ vi.mock('@/services/api', () => ({
 }));
 vi.mock('@/services/authApi', () => ({
   fetchCurrentUser: mocks.fetchCurrentUser,
+  fetchPointTransactions: mocks.fetchPointTransactions,
   login: mocks.login,
   register: mocks.register,
   logout: mocks.logout,

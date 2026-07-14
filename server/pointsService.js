@@ -3,6 +3,7 @@ import { createHmac, randomInt, randomUUID } from 'node:crypto';
 export const POINT_UNITS_PER_POINT = 10;
 export const MEDIA_COST_UNITS = Object.freeze({ gpt: 2, grok: 1, video: 15 });
 export const MAX_POINT_TRANSACTIONS = 1_000;
+export const MAX_LISTED_POINT_TRANSACTIONS = 30;
 export const MAX_TERMINAL_POINT_RESERVATIONS = 1_000;
 export const MAX_UNUSED_REDEEM_CODES = 1_000;
 export const MAX_REDEEM_CODE_RECORDS = 2_000;
@@ -804,6 +805,31 @@ export function createPointsService({
       }));
   }
 
+  function listTransactions(userId, limit = MAX_LISTED_POINT_TRANSACTIONS) {
+    const user = getUser(userId);
+    const normalizedLimit = Number.isSafeInteger(limit) && limit > 0
+      ? Math.min(limit, MAX_LISTED_POINT_TRANSACTIONS)
+      : MAX_LISTED_POINT_TRANSACTIONS;
+
+    return data.pointTransactions
+      .filter(transaction => (
+        transaction.userId === user.id && transaction.type !== 'reserve'
+      ))
+      .slice(-normalizedLimit)
+      .reverse()
+      .map(transaction => ({
+        id: transaction.id,
+        type: transaction.type,
+        units: transaction.units,
+        costUnits: transaction.costUnits ?? 0,
+        taskType: transaction.taskType ?? null,
+        reason: transaction.reason ?? null,
+        balanceUnits: transaction.balanceUnits,
+        availableUnits: transaction.availableUnits,
+        createdAt: transaction.createdAt,
+      }));
+  }
+
   return {
     getBalance,
     credit,
@@ -815,5 +841,6 @@ export function createPointsService({
     generateRedeemCode,
     redeemCode,
     listMaskedCodes,
+    listTransactions,
   };
 }

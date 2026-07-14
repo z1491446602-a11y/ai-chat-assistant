@@ -366,6 +366,42 @@ describe('points service', () => {
     expect(saveData).toHaveBeenCalledTimes(savesAfterFirstSettlement);
   });
 
+  it('lists recent completed point activity newest first without pending reservations', () => {
+    let timestamp = 1_000;
+    const { points } = createHarness({
+      balanceUnits: 30,
+      now: () => timestamp++,
+    });
+    points.credit('user-1', 10, 'redeem');
+    points.reserve({ taskId: 'image-1', userId: 'user-1', costUnits: 2, taskType: 'image' });
+    points.settle('image-1', true);
+    points.reserve({ taskId: 'video-1', userId: 'user-1', costUnits: 15, taskType: 'video' });
+    points.settle('video-1', false);
+
+    expect(points.listTransactions('user-1')).toEqual([
+      expect.objectContaining({
+        type: 'release',
+        units: 0,
+        costUnits: 15,
+        taskType: 'video',
+      }),
+      expect.objectContaining({
+        type: 'debit',
+        units: -2,
+        costUnits: 2,
+        taskType: 'image',
+      }),
+      expect.objectContaining({
+        type: 'credit',
+        units: 10,
+        costUnits: 0,
+        taskType: null,
+        reason: 'redeem',
+      }),
+    ]);
+    expect(points.listTransactions('user-1', 1)).toHaveLength(1);
+  });
+
   it('releases orphaned reservations while preserving active tasks', () => {
     const { data, points } = createHarness({ balanceUnits: 20 });
     points.reserve({ taskId: 'active', userId: 'user-1', costUnits: 3, taskType: 'image' });
