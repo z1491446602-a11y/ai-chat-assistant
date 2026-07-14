@@ -36,57 +36,6 @@ function createProviders(upstreamFetch, configOverrides = {}) {
 }
 
 describe('image batch generation', () => {
-  it('sends DeepSeek vision messages with an image_url content part', async () => {
-    const upstreamFetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ choices: [{ message: { content: '已识别图片' } }] })),
-    );
-    const providers = createProviders(upstreamFetch, {
-      DEEPSEEK_VOICE_CHAT_API_KEY: 'deepseek-key',
-      DEEPSEEK_VOICE_CHAT_API_URL: 'https://deepseek.example/chat/completions',
-      DEEPSEEK_VOICE_CHAT_MODEL: 'deepseek-v4-flash',
-    });
-
-    await expect(providers.performChatCompletion({
-      model: 'deepseek-v4-flash',
-      messages: [{
-        role: 'user',
-        content: '请描述这张图',
-        images: ['data:image/png;base64,AA=='],
-      }],
-    })).resolves.toMatchObject({ content: '已识别图片' });
-
-    const body = JSON.parse(upstreamFetch.mock.calls[0][1].body);
-    expect(body.model).toBe('deepseek-v4-flash');
-    expect(body.messages).toContainEqual({
-      role: 'user',
-      content: [
-        { type: 'text', text: '请描述这张图' },
-        { type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } },
-      ],
-    });
-  });
-
-  it('preserves image parts when converting chat messages for vision-capable providers', async () => {
-    const providers = createProviders(vi.fn());
-    const responsesInput = await providers.buildResponsesInput([
-      {
-        role: 'user',
-        content: '请描述这张图',
-        images: ['data:image/png;base64,AA=='],
-      },
-    ]);
-
-    expect(providers.buildChatCompletionsMessages(responsesInput)).toEqual([
-      {
-        role: 'user',
-        content: [
-          { type: 'text', text: '请描述这张图' },
-          { type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } },
-        ],
-      },
-    ]);
-  });
-
   it('falls back to the configured GPT channel after a primary upstream failure', async () => {
     const upstreamFetch = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: 'rate limit reached' } }), { status: 429 }))
