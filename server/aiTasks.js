@@ -1,4 +1,4 @@
-import {
+﻿import {
   MediaTaskQueueCancelledError,
   MediaTaskQueueFullError,
 } from './mediaTaskScheduler.js';
@@ -834,13 +834,16 @@ export function createAiTaskStore({
         } else {
           let upstreamVideoUrl = '';
           if (!task.upstreamTaskId) {
+            console.log('[video-task] submitting', JSON.stringify({ taskId: task.id, promptLen: (task.prompt || '').length, imageCount: Array.isArray(task.images) ? task.images.length : 0 }));
             const submitted = await videoProvider.submit({
               prompt: task.prompt,
               images: task.images,
             });
+            console.log('[video-task] submit result', JSON.stringify({ taskId: task.id, upstreamTaskId: submitted.id, status: submitted.status, hasVideoUrl: Boolean(submitted.videoUrl) }));
             throwIfCancelled(task, controller);
             task.upstreamTaskId = submitted.id;
             if (submitted.status === 'completed' && submitted.videoUrl) {
+              console.log('[video-task] immediately completed', task.id);
               upstreamVideoUrl = submitted.videoUrl;
             } else {
               updateVideoStage(task, submitted.status === 'processing' ? 'processing' : 'queued');
@@ -848,17 +851,22 @@ export function createAiTaskStore({
           }
 
           if (!upstreamVideoUrl) {
+            const pollStartMs = Date.now();
+            console.log('[video-task] start polling', JSON.stringify({ taskId: task.id, upstreamTaskId: task.upstreamTaskId }));
             upstreamVideoUrl = await videoProvider.poll(task.upstreamTaskId, (stage) => {
               updateVideoStage(task, stage);
             });
+            console.log('[video-task] poll completed', JSON.stringify({ taskId: task.id, pollDurationMs: Date.now() - pollStartMs, urlLen: String(upstreamVideoUrl || '').length }));
             throwIfCancelled(task, controller);
           }
 
+          console.log('[video-task] downloading video', task.id);
           const video = await videoFileStore.downloadValidateAndSave({
             jobId: task.id,
             videoUrl: upstreamVideoUrl,
             onStage: (stage) => updateVideoStage(task, stage),
           });
+          console.log('[video-task] download done', JSON.stringify({ taskId: task.id, fileSize: video.fileSize ?? 0 }));
           throwIfCancelled(task, controller);
           completeVideoTask(task, video);
         }
@@ -872,6 +880,7 @@ export function createAiTaskStore({
         || (error instanceof Error && error.name === 'AbortError');
       if (task.type === 'video' && !isAbort) {
         const failedStage = task.videoStage || 'submitting';
+        console.error('[video-task] failed', JSON.stringify({ taskId: task.id, stage: failedStage, upstreamId: task.upstreamTaskId, errorMsg: error?.message || '' }));
         const publicError = getVideoFailureText(task, error);
         task.status = 'failed';
         task.error = publicError;
