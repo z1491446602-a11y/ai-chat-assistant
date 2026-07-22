@@ -31,10 +31,6 @@ interface AiChatComposerProps {
   aiImageInputRef: RefObject<HTMLInputElement>;
   aiFileInputRef: RefObject<HTMLInputElement>;
   aiVideoImageInputRef: RefObject<HTMLInputElement>;
-  mediaAuthenticated: boolean;
-  imageGenerationAllowed: boolean;
-  videoGenerationAllowed: boolean;
-  onRequireLogin: () => void;
   onInputChange: (value: string) => void;
   onSendMessage: () => void;
   onSelectImageProvider: (provider: ImageGenerationProvider) => void;
@@ -125,7 +121,7 @@ export function AiChatComposer(props: AiChatComposerProps) {
           <textarea ref={props.composerRef} value={props.input} onChange={event => props.onInputChange(event.target.value)} onPaste={handlePaste} placeholder={props.placeholder} rows={1} className="block max-h-[168px] min-h-[36px] w-full resize-none bg-transparent px-2 py-1 text-[15px] leading-6 outline-none" onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); props.onSendMessage(); } }} disabled={busy} />
           <div className="mt-1.5 flex min-w-0 items-end justify-between gap-2">
             <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-              <AiChatComposerAttachments showMoreActions={props.showMoreActions} effectiveImageGenerationMode={props.effectiveImageGenerationMode} isVideoGenerationMode={props.isVideoGenerationMode} isGeneratingVideoTask={props.isGeneratingVideoTask} isUploadingImages={props.isUploadingImages} isUploadingFile={props.isUploadingFile} disabled={props.loading} mediaAuthenticated={props.mediaAuthenticated} imageGenerationAllowed={props.imageGenerationAllowed} videoGenerationAllowed={props.videoGenerationAllowed} onRequireLogin={props.onRequireLogin} onToggleImageGenerationMode={props.onToggleImageGenerationMode} onToggleVideoGenerationMode={props.onToggleVideoGenerationMode} onOpenMoreActions={props.onOpenMoreActions} onOpenAiImagePicker={props.onOpenAiImagePicker} onOpenAiFilePicker={props.onOpenAiFilePicker} />
+              <AiChatComposerAttachments showMoreActions={props.showMoreActions} effectiveImageGenerationMode={props.effectiveImageGenerationMode} isVideoGenerationMode={props.isVideoGenerationMode} isGeneratingVideoTask={props.isGeneratingVideoTask} isUploadingImages={props.isUploadingImages} isUploadingFile={props.isUploadingFile} disabled={props.loading} onToggleImageGenerationMode={props.onToggleImageGenerationMode} onToggleVideoGenerationMode={props.onToggleVideoGenerationMode} onOpenMoreActions={props.onOpenMoreActions} onOpenAiImagePicker={props.onOpenAiImagePicker} onOpenAiFilePicker={props.onOpenAiFilePicker} />
               {props.effectiveImageGenerationMode && !props.isVideoGenerationMode ? (
                 <ImageInputPanel
                   images={props.pendingAiImages}

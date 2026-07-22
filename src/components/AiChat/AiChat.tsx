@@ -107,10 +107,8 @@ export function AiChat({
     : session.ownerType !== 'guest' && session.ownerId === aiOwner.userId).sort((a, b) => b.updatedAt - a.updatedAt), [aiOwner, sessions]);
   const currentAiSession = useMemo(() => aiSessions.find(session => session.id === currentSessionId) || null, [aiSessions, currentSessionId]);
   const currentAiMessages = currentAiSession?.messages || [];
-  const imageGenerationAllowed = user?.mediaPermissions.imageGeneration === true;
-  const videoGenerationAllowed = user?.mediaPermissions.videoGeneration === true;
   const autoImageMode = useMemo(() => detectImageGenerationMode(input, pendingAiImages.length), [input, pendingAiImages.length]);
-  const effectiveImageGenerationMode = imageGenerationAllowed && !isVideoGenerationMode && !suppressAutoImageMode && (isImageGenerationMode || autoImageMode !== null);
+  const effectiveImageGenerationMode = !isVideoGenerationMode && !suppressAutoImageMode && (isImageGenerationMode || autoImageMode !== null);
   const activeVideoMessage = [...currentAiMessages].reverse().find(message => message.role === 'assistant' && message.status === 'streaming' && message.videoGenerationStage);
 
   const sync = useAiChatSync({ aiOwner, interactionEnabled, refreshAiSessions, currentSessionId, currentAiSession, patchMessage, setStreaming, setStreamingMessageId });
@@ -153,16 +151,6 @@ export function AiChat({
     setShowMoreActions(false);
   }, [sidebarOpen]);
   useEffect(() => {
-    if (!imageGenerationAllowed) {
-      setIsImageGenerationMode(false);
-      setSuppressAutoImageMode(false);
-    }
-    if (!videoGenerationAllowed) {
-      setIsVideoGenerationMode(false);
-      setPendingAiVideoInputs(createEmptyVideoGenerationInputs());
-    }
-  }, [imageGenerationAllowed, user, videoGenerationAllowed]);
-  useEffect(() => {
     if (!input.trim()) setSuppressAutoImageMode(false);
   }, [input]);
   useEffect(() => () => { void cancelPressVoiceInput(); }, []);
@@ -174,10 +162,6 @@ export function AiChat({
     }
     if (isStreaming) {
       if (!isGeneratingVideoTask) sync.handleAbortAiResponse();
-      return;
-    }
-    if ((!imageGenerationAllowed && effectiveImageGenerationMode) || (!videoGenerationAllowed && isVideoGenerationMode)) {
-      onRequireLogin();
       return;
     }
     await actions.handleSendAiMessage();
@@ -353,10 +337,6 @@ export function AiChat({
       aiImageInputRef={aiImageInputRef}
       aiFileInputRef={aiFileInputRef}
       aiVideoImageInputRef={aiVideoImageInputRef}
-      mediaAuthenticated={authStatus === 'authenticated' && Boolean(user)}
-      imageGenerationAllowed={imageGenerationAllowed}
-      videoGenerationAllowed={videoGenerationAllowed}
-      onRequireLogin={onRequireLogin}
       onInputChange={setInput}
       onSendMessage={() => void handleSendMessage()}
       onSelectImageProvider={provider => {

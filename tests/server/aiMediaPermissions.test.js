@@ -28,11 +28,20 @@ async function startApp() {
     next();
   });
 
-  const resolveAiOwnerFromInput = vi.fn(() => ({
-    ownerRef: { userId: 'account-1' },
-    ownerId: 'account-1',
-    ownerType: 'user',
-  }));
+  const resolveAiOwnerFromInput = vi.fn(({ userId, guestId } = {}) => {
+    if (userId) {
+      return {
+        ownerRef: { userId },
+        ownerId: userId,
+        ownerType: 'user',
+      };
+    }
+    return {
+      ownerRef: { guestId },
+      ownerId: guestId,
+      ownerType: 'guest',
+    };
+  });
   registerAiRoutes(app, {
     resolveAiOwnerFromInput,
     resolveImageProvider: vi.fn(() => ({ id: 'gpt', apiKey: 'configured' })),
@@ -78,51 +87,27 @@ async function startApp() {
   return { baseUrl: `http://127.0.0.1:${address.port}`, resolveAiOwnerFromInput };
 }
 
-function post(baseUrl, path, headers = {}) {
+function post(baseUrl, path, headers = {}, body = { prompt: '' }) {
   return fetch(`${baseUrl}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...headers },
-    body: JSON.stringify({ prompt: '' }),
+    body: JSON.stringify(body),
   });
 }
 
-describe('AI media account permissions', () => {
+describe('AI media availability', () => {
   it.each([
     ['/api/ai-task/image', '图片'],
     ['/api/ai-task/video', '视频'],
     ['/api/image-generation', '图片'],
-  ])('requires login for %s', async (path) => {
+  ])('allows an unauthenticated guest to reach %s validation', async (path) => {
     const { baseUrl } = await startApp();
-    const response = await post(baseUrl, path);
-    expect(response.status).toBe(401);
-    expect(await response.json()).toEqual({ error: '请先登录后再使用图片或视频生成功能' });
+    const response = await post(baseUrl, path, {}, { prompt: '', guestId: 'guest-1' });
+    expect(response.status).toBe(400);
   });
 
-  it('blocks an ordinary account without image or video authorization', async () => {
-    const { baseUrl, resolveAiOwnerFromInput } = await startApp();
-    const headers = { 'x-test-role': 'user' };
-    const image = await post(baseUrl, '/api/ai-task/image', headers);
-    const video = await post(baseUrl, '/api/ai-task/video', headers);
-    expect(image.status).toBe(403);
-    expect(await image.json()).toEqual({ error: '该账号尚未获得图片生成功能授权，请联系管理员' });
-    expect(video.status).toBe(403);
-    expect(await video.json()).toEqual({ error: '该账号尚未获得视频生成功能授权，请联系管理员' });
-    expect(resolveAiOwnerFromInput).not.toHaveBeenCalled();
-  });
-
-  it('allows image-only authorization without allowing video', async () => {
+  it('falls back to an IP-scoped guest owner when no owner is provided', async () => {
     const { baseUrl } = await startApp();
-    const headers = { 'x-test-role': 'user', 'x-test-image': 'true' };
-    const image = await post(baseUrl, '/api/ai-task/image', headers);
-    const video = await post(baseUrl, '/api/ai-task/video', headers);
-    expect(image.status).toBe(400);
-    expect(video.status).toBe(403);
-  });
-
-  it('lets administrators pass both media permission gates', async () => {
-    const { baseUrl } = await startApp();
-    const headers = { 'x-test-role': 'admin' };
-    expect((await post(baseUrl, '/api/ai-task/image', headers)).status).toBe(400);
-    expect((await post(baseUrl, '/api/ai-task/video', headers)).status).toBe(400);
+    expect((await post(baseUrl, '/api/ai-task/image')).status).toBe(400);
   });
 });

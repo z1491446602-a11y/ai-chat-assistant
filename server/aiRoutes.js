@@ -238,7 +238,6 @@ export function registerAiRoutes(app, deps) {
   const videoImageDataUrlPattern = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+={0,2})$/i;
   const videoReferenceMaxBytes = 10 * 1024 * 1024;
   const videoReferenceMaxTotalBytes = 32 * 1024 * 1024;
-  const loginRequiredMessage = '请先登录后再使用图片或视频生成功能';
   const pendingTaskConflictMessage = '当前会话已有任务正在处理，请等待完成后再试';
   const guestOperationLimiter = createGuestOperationLimiter();
   const compatibilityChatScheduler = typeof chatTaskScheduler?.schedule === 'function'
@@ -419,19 +418,8 @@ export function registerAiRoutes(app, deps) {
       return resolveAiOwnerFromInput({ guestId });
     }
 
-    return { error: '请先登录或提供访客标识', status: 401 };
-  }
-
-  function hasMediaPermission(req, type) {
-    if (req.authUser?.role === 'admin') return true;
-    const permission = type === 'video' ? 'videoGeneration' : 'imageGeneration';
-    return req.authUser?.mediaPermissions?.[permission] === true;
-  }
-
-  function mediaPermissionMessage(type) {
-    return type === 'video'
-      ? '该账号尚未获得视频生成功能授权，请联系管理员'
-      : '该账号尚未获得图片生成功能授权，请联系管理员';
+    const ip = String(req.ip || req.socket?.remoteAddress || 'unknown').trim() || 'unknown';
+    return resolveAiOwnerFromInput({ guestId: `guest-ip:${ip}` });
   }
 
   function runTrackedAiTask(taskId) {
@@ -1080,17 +1068,13 @@ export function registerAiRoutes(app, deps) {
   });
 
   app.post('/api/ai-task/image', async (req, res) => {
-    if (!req.authUser?.id) {
-      return res.status(401).json({ error: loginRequiredMessage });
-    }
-    if (!hasMediaPermission(req, 'image')) {
-      return res.status(403).json({ error: mediaPermissionMessage('image') });
-    }
-
     const ownerLookup = resolveRequestOwner(req, req.body);
 
     if (ownerLookup.error) {
       return res.status(ownerLookup.status || 401).json({ error: ownerLookup.error });
+    }
+    if (!consumeGuestOperation(req, ownerLookup)) {
+      return res.status(429).json({ error: '访客操作过于频繁，请稍后再试' });
     }
 
     const prompt = String(req.body.prompt || '').trim();
@@ -1234,16 +1218,12 @@ export function registerAiRoutes(app, deps) {
   });
 
   app.post('/api/ai-task/video', (req, res) => {
-    if (!req.authUser?.id) {
-      return res.status(401).json({ error: loginRequiredMessage });
-    }
-    if (!hasMediaPermission(req, 'video')) {
-      return res.status(403).json({ error: mediaPermissionMessage('video') });
-    }
-
     const ownerLookup = resolveRequestOwner(req, req.body);
     if (ownerLookup.error) {
       return res.status(ownerLookup.status || 401).json({ error: ownerLookup.error });
+    }
+    if (!consumeGuestOperation(req, ownerLookup)) {
+      return res.status(429).json({ error: '访客操作过于频繁，请稍后再试' });
     }
 
     const prompt = String(req.body.prompt || '').trim();
@@ -1640,13 +1620,6 @@ export function registerAiRoutes(app, deps) {
   }
 
   app.post('/api/image-generation', async (req, res) => {
-    if (!req.authUser?.id) {
-      return res.status(401).json({ error: loginRequiredMessage });
-    }
-    if (!hasMediaPermission(req, 'image')) {
-      return res.status(403).json({ error: mediaPermissionMessage('image') });
-    }
-
     const requestId = getCompatibleMediaRequestId(getLegacyImageRequestId(req));
 
     const prompt = String(req.body?.prompt || '').trim();
@@ -1679,6 +1652,12 @@ export function registerAiRoutes(app, deps) {
     }
 
     const ownerLookup = resolveRequestOwner(req, req.body);
+    if (ownerLookup.error) {
+      return res.status(ownerLookup.status || 401).json({ error: ownerLookup.error });
+    }
+    if (!consumeGuestOperation(req, ownerLookup)) {
+      return res.status(429).json({ error: '访客操作过于频繁，请稍后再试' });
+    }
     const mediaClaim = claimMediaRequest({
       ownerLookup,
       mediaType: 'image',

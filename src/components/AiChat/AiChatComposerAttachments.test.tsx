@@ -15,10 +15,6 @@ function renderComposer(patch = {}) {
     isUploadingImages: false,
     isUploadingFile: false,
     disabled: false,
-    mediaAuthenticated: true,
-    imageGenerationAllowed: true,
-    videoGenerationAllowed: true,
-    onRequireLogin: vi.fn(),
     onToggleImageGenerationMode: vi.fn(),
     onToggleVideoGenerationMode: vi.fn(),
     onOpenMoreActions: vi.fn(),
@@ -65,15 +61,10 @@ describe('AI chat composer actions', () => {
     expect(within(menu as HTMLElement).queryByText('生成视频')).toBeNull();
   });
 
-  it('opens login instead of media controls for guests', () => {
-    const onRequireLogin = vi.fn();
+  it('keeps media controls available for guests', () => {
     const onToggleImageGenerationMode = vi.fn();
     const onToggleVideoGenerationMode = vi.fn();
     const view = renderComposer({
-      mediaAuthenticated: false,
-      imageGenerationAllowed: false,
-      videoGenerationAllowed: false,
-      onRequireLogin,
       onToggleImageGenerationMode,
       onToggleVideoGenerationMode,
     });
@@ -81,9 +72,8 @@ describe('AI chat composer actions', () => {
     fireEvent.click(within(view.container).getByRole('button', { name: '生成图片' }));
     fireEvent.click(within(view.container).getByRole('button', { name: '生成视频' }));
 
-    expect(onRequireLogin).toHaveBeenCalledTimes(2);
-    expect(onToggleImageGenerationMode).not.toHaveBeenCalled();
-    expect(onToggleVideoGenerationMode).not.toHaveBeenCalled();
+    expect(onToggleImageGenerationMode).toHaveBeenCalledTimes(1);
+    expect(onToggleVideoGenerationMode).toHaveBeenCalledTimes(1);
   });
 
   it('keeps ordinary attachment pickers available for a resolved guest', () => {
@@ -91,9 +81,6 @@ describe('AI chat composer actions', () => {
     const onOpenAiImagePicker = vi.fn();
     const onOpenAiFilePicker = vi.fn();
     renderComposer({
-      mediaAuthenticated: false,
-      imageGenerationAllowed: false,
-      videoGenerationAllowed: false,
       showMoreActions: true,
       onOpenMoreActions,
       onOpenAiImagePicker,
@@ -109,9 +96,8 @@ describe('AI chat composer actions', () => {
     expect(onOpenAiFilePicker).toHaveBeenCalledTimes(1);
   });
 
-  it('disables attachment and media controls while authentication is unresolved', () => {
+  it('disables attachment and media controls while busy', () => {
     const callbacks = {
-      onRequireLogin: vi.fn(),
       onOpenMoreActions: vi.fn(),
       onOpenAiImagePicker: vi.fn(),
       onOpenAiFilePicker: vi.fn(),

@@ -8,10 +8,6 @@ interface AiChatComposerAttachmentsProps {
   isUploadingImages: boolean;
   isUploadingFile: boolean;
   disabled: boolean;
-  mediaAuthenticated: boolean;
-  imageGenerationAllowed: boolean;
-  videoGenerationAllowed: boolean;
-  onRequireLogin: () => void;
   onToggleImageGenerationMode: () => void;
   onToggleVideoGenerationMode: () => void;
   onOpenMoreActions: () => void;
@@ -20,13 +16,8 @@ interface AiChatComposerAttachmentsProps {
 }
 
 export function AiChatComposerAttachments(props: AiChatComposerAttachmentsProps) {
-  const runMediaAction = (allowed: boolean, action: () => void) => {
+  const runMediaAction = (action: () => void) => {
     if (props.disabled) return;
-    if (!props.mediaAuthenticated) {
-      props.onRequireLogin();
-      return;
-    }
-    if (!allowed) return;
     action();
   };
   const inactiveClass = 'border border-sky-100 bg-sky-50 text-slate-700 hover:bg-sky-100';
@@ -51,19 +42,19 @@ export function AiChatComposerAttachments(props: AiChatComposerAttachmentsProps)
       </div>
 
       {props.isVideoGenerationMode ? (
-        <button type="button" onClick={() => runMediaAction(props.videoGenerationAllowed, props.onToggleVideoGenerationMode)} disabled={props.disabled || props.isGeneratingVideoTask || !props.videoGenerationAllowed} className={`flex h-8 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-medium transition-colors disabled:opacity-50 ${activeClass}`} aria-label="关闭视频生成">
+        <button type="button" onClick={() => runMediaAction(props.onToggleVideoGenerationMode)} disabled={props.disabled || props.isGeneratingVideoTask} className={`flex h-8 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-medium transition-colors disabled:opacity-50 ${activeClass}`} aria-label="关闭视频生成">
           <Video className="h-3.5 w-3.5" /><span>视频生成</span><X className="h-3.5 w-3.5" />
         </button>
       ) : props.effectiveImageGenerationMode ? (
-        <button type="button" onClick={() => runMediaAction(props.imageGenerationAllowed, props.onToggleImageGenerationMode)} disabled={props.disabled || !props.imageGenerationAllowed} className={`flex h-8 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-medium transition-colors disabled:opacity-50 ${activeClass}`} aria-label="关闭图片生成">
+        <button type="button" onClick={() => runMediaAction(props.onToggleImageGenerationMode)} disabled={props.disabled} className={`flex h-8 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-medium transition-colors disabled:opacity-50 ${activeClass}`} aria-label="关闭图片生成">
           <Images className="h-3.5 w-3.5" /><span>图片生成</span><X className="h-3.5 w-3.5" />
         </button>
       ) : (
         <>
-          <button type="button" title={props.mediaAuthenticated && !props.imageGenerationAllowed ? '需管理员授权' : undefined} onClick={() => runMediaAction(props.imageGenerationAllowed, props.onToggleImageGenerationMode)} disabled={props.disabled || (props.mediaAuthenticated && !props.imageGenerationAllowed)} className={`flex h-8 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${inactiveClass}`} aria-label="生成图片">
+          <button type="button" onClick={() => runMediaAction(props.onToggleImageGenerationMode)} disabled={props.disabled} className={`flex h-8 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${inactiveClass}`} aria-label="生成图片">
             <Images className="h-3.5 w-3.5" /><span className="max-[360px]:hidden">生成图片</span>
           </button>
-          <button type="button" title={props.mediaAuthenticated && !props.videoGenerationAllowed ? '需管理员授权' : undefined} onClick={() => runMediaAction(props.videoGenerationAllowed, props.onToggleVideoGenerationMode)} disabled={props.disabled || props.isGeneratingVideoTask || (props.mediaAuthenticated && !props.videoGenerationAllowed)} className={`flex h-8 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${inactiveClass}`} aria-label="生成视频">
+          <button type="button" onClick={() => runMediaAction(props.onToggleVideoGenerationMode)} disabled={props.disabled || props.isGeneratingVideoTask} className={`flex h-8 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${inactiveClass}`} aria-label="生成视频">
             <Video className="h-3.5 w-3.5" /><span className="max-[360px]:hidden">生成视频</span>
           </button>
         </>

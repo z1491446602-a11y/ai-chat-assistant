@@ -13,7 +13,6 @@ import { useEffect, useId, useRef, useState } from 'react';
 import type { FormEvent, MouseEvent } from 'react';
 import type {
   AdminResetPasswordInput,
-  AdminUser,
   AuthUser,
   LoginInput,
   RegisterInput,
@@ -29,11 +28,6 @@ export interface AccountDialogProps {
   onLogin: (input: LoginInput) => ActionResult;
   onRegister: (input: RegisterInput) => ActionResult;
   onLogout: () => ActionResult;
-  onLoadUsers: () => Promise<AdminUser[]>;
-  onUpdatePermissions: (
-    userId: string,
-    permissions: AuthUser['mediaPermissions'],
-  ) => Promise<AdminUser>;
   onResetPassword: (input: AdminResetPasswordInput) => ActionResult;
 }
 
@@ -46,37 +40,6 @@ function errorMessage(error: unknown): string {
 const inputClass = 'min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3.5 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50';
 const primaryButtonClass = 'inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
 
-function PermissionToggle({
-  checked,
-  disabled,
-  icon: Icon,
-  label,
-  onChange,
-}: {
-  checked: boolean;
-  disabled: boolean;
-  icon: typeof Image;
-  label: string;
-  onChange: (checked: boolean) => void;
-}) {
-  return (
-    <label className="flex min-h-11 items-center justify-between gap-3 rounded-lg px-3 py-2 hover:bg-slate-50">
-      <span className="flex items-center gap-2 text-sm text-slate-700">
-        <Icon aria-hidden="true" className="h-4 w-4 text-slate-500" />
-        {label}
-      </span>
-      <input
-        aria-label={label}
-        checked={checked}
-        className="h-4 w-4 accent-blue-600"
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.checked)}
-        type="checkbox"
-      />
-    </label>
-  );
-}
-
 export function AccountDialog({
   open,
   user,
@@ -85,8 +48,6 @@ export function AccountDialog({
   onLogin,
   onRegister,
   onLogout,
-  onLoadUsers,
-  onUpdatePermissions,
   onResetPassword,
 }: AccountDialogProps) {
   const titleId = useId();
@@ -96,19 +57,15 @@ export function AccountDialog({
   const [password, setPassword] = useState('');
   const [realName, setRealName] = useState('');
   const [actionError, setActionError] = useState('');
-  const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
-  const [usersLoading, setUsersLoading] = useState(false);
-  const [updatingUserId, setUpdatingUserId] = useState('');
   const [resetPhone, setResetPhone] = useState('');
   const [resetRealName, setResetRealName] = useState('');
   const [resetNewPassword, setResetNewPassword] = useState('');
   const [resettingPassword, setResettingPassword] = useState(false);
-  const controlsBusy = busy || Boolean(updatingUserId) || resettingPassword;
+  const controlsBusy = busy || resettingPassword;
 
   useEffect(() => {
     if (!open) {
       setActionError('');
-      setAdminUsers([]);
       setResetPhone('');
       setResetRealName('');
       setResetNewPassword('');
@@ -117,17 +74,6 @@ export function AccountDialog({
     const timer = window.setTimeout(() => firstInputRef.current?.focus(), 0);
     return () => window.clearTimeout(timer);
   }, [open]);
-
-  useEffect(() => {
-    if (!open || user?.role !== 'admin') return;
-    let cancelled = false;
-    setUsersLoading(true);
-    void onLoadUsers()
-      .then(users => { if (!cancelled) setAdminUsers(users); })
-      .catch(error => { if (!cancelled) setActionError(errorMessage(error)); })
-      .finally(() => { if (!cancelled) setUsersLoading(false); });
-    return () => { cancelled = true; };
-  }, [onLoadUsers, open, user?.role]);
 
   useEffect(() => {
     if (!open) return;
@@ -155,25 +101,6 @@ export function AccountDialog({
     void runAction(() => authMode === 'login'
       ? onLogin({ phone: normalizedPhone, password })
       : onRegister({ phone: normalizedPhone, password, realName: realName.trim() }));
-  };
-
-  const updatePermissions = async (
-    target: AdminUser,
-    patch: Partial<AuthUser['mediaPermissions']>,
-  ) => {
-    setActionError('');
-    setUpdatingUserId(target.id);
-    try {
-      const updated = await onUpdatePermissions(target.id, {
-        ...target.mediaPermissions,
-        ...patch,
-      });
-      setAdminUsers(users => users.map(item => item.id === updated.id ? updated : item));
-    } catch (error) {
-      setActionError(errorMessage(error));
-    } finally {
-      setUpdatingUserId('');
-    }
   };
 
   const handleResetPassword = (event: FormEvent<HTMLFormElement>) => {
@@ -222,39 +149,21 @@ export function AccountDialog({
                 {user.role === 'admin' && <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">管理员</span>}
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <div className={`rounded-lg border px-3 py-3 ${user.mediaPermissions.imageGeneration ? 'border-emerald-200 bg-emerald-50/60' : 'border-slate-200 bg-slate-50'}`}>
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-3">
                   <Image className="mb-2 h-4 w-4 text-slate-600" />
                   <p className="text-sm font-medium text-slate-900">图片生成</p>
-                  <p className="mt-1 text-xs text-slate-500">{user.mediaPermissions.imageGeneration ? '已授权' : '未授权'}</p>
+                  <p className="mt-1 text-xs text-slate-500">公开可用</p>
                 </div>
-                <div className={`rounded-lg border px-3 py-3 ${user.mediaPermissions.videoGeneration ? 'border-emerald-200 bg-emerald-50/60' : 'border-slate-200 bg-slate-50'}`}>
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-3">
                   <Video className="mb-2 h-4 w-4 text-slate-600" />
                   <p className="text-sm font-medium text-slate-900">视频生成</p>
-                  <p className="mt-1 text-xs text-slate-500">{user.mediaPermissions.videoGeneration ? '已授权' : '未授权'}</p>
+                  <p className="mt-1 text-xs text-slate-500">公开可用</p>
                 </div>
               </div>
             </section>
 
             {user.role === 'admin' && (
               <>
-                <section className="border-t border-slate-200 pt-5">
-                  <h3 className="text-sm font-semibold text-slate-900">用户授权</h3>
-                  <div className="mt-3 divide-y divide-slate-100 rounded-lg border border-slate-200">
-                    {usersLoading && <p className="p-4 text-sm text-slate-500">正在加载账号...</p>}
-                    {!usersLoading && adminUsers.filter(item => item.role !== 'admin').map(target => (
-                      <div className="p-3" key={target.id}>
-                        <div className="mb-1 px-3">
-                          <p className="text-sm font-medium text-slate-900">{target.realName}</p>
-                          <p className="text-xs text-slate-500">{target.phone}</p>
-                        </div>
-                        <PermissionToggle checked={target.mediaPermissions.imageGeneration} disabled={controlsBusy} icon={Image} label="图片生成" onChange={checked => void updatePermissions(target, { imageGeneration: checked })} />
-                        <PermissionToggle checked={target.mediaPermissions.videoGeneration} disabled={controlsBusy} icon={Video} label="视频生成" onChange={checked => void updatePermissions(target, { videoGeneration: checked })} />
-                      </div>
-                    ))}
-                    {!usersLoading && adminUsers.filter(item => item.role !== 'admin').length === 0 && <p className="p-4 text-sm text-slate-500">暂无普通账号</p>}
-                  </div>
-                </section>
-
                 <section className="border-t border-slate-200 pt-5">
                   <h3 className="text-sm font-semibold text-slate-900">重置用户密码</h3>
                   <form className="mt-3 space-y-3" onSubmit={handleResetPassword}>

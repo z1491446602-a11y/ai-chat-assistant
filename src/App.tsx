@@ -20,12 +20,10 @@ import type { Session } from '@/types';
 import { getAiOwner } from '@/utils/aiOwner';
 import {
   adminResetPassword,
-  fetchAdminUsers,
   fetchCurrentUser,
   login as loginAccount,
   logout as logoutAccount,
   register as registerAccount,
-  updateMediaPermissions,
   type AuthStatus,
   type AuthUser,
   type AdminResetPasswordInput,
@@ -363,7 +361,9 @@ function ChatApp({ onGoHome }: { onGoHome: () => void }) {
       .catch((error) => {
         console.error('Failed to load current account', error);
         if (active && accountGeneration === accountGenerationRef.current) {
-          setAuthStatus('error');
+          authUserIdRef.current = null;
+          setAuthUser(null);
+          setAuthStatus('guest');
         }
       });
 
@@ -717,8 +717,6 @@ function ChatApp({ onGoHome }: { onGoHome: () => void }) {
             onLogin={handleLogin}
             onRegister={handleRegister}
             onLogout={handleLogout}
-            onLoadUsers={fetchAdminUsers}
-            onUpdatePermissions={updateMediaPermissions}
             onResetPassword={handleAdminResetPassword}
           />
         </Suspense>
