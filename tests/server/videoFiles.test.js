@@ -48,6 +48,19 @@ describe('video file store', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it('returns an allowlisted temporary URL for direct playback without downloading it', () => {
+    const fetchImpl = vi.fn();
+    const store = createVideoFileStore({
+      videoDir: makeTempDir(), allowedHosts: ['vidgen.x.ai'], fetchImpl,
+    });
+
+    expect(store.createExternalVideoReference('https://vidgen.x.ai/xai-vidgen-bucket/output.mp4')).toEqual({
+      videoUrl: 'https://vidgen.x.ai/xai-vidgen-bucket/output.mp4',
+      videoMimeType: 'video/mp4',
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('streams, validates, probes, and atomically installs a deterministic MP4', async () => {
     const body = mp4Buffer();
     const fetchImpl = vi.fn().mockResolvedValue(new Response(body));

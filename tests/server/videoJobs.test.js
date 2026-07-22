@@ -20,7 +20,11 @@ describe('video job persistence', () => {
   it('initializes videoJobs only when the property is missing', () => {
     const harness = createHarness({ users: {} });
 
-    expect(harness.store.getRecoveryPlan()).toEqual({ recoverable: [], unknownSubmission: [] });
+    expect(harness.store.getRecoveryPlan()).toEqual({
+      recoverable: [],
+      unknownSubmission: [],
+      staleAssets: [],
+    });
     expect(harness.data().videoJobs).toEqual({});
   });
 
@@ -52,7 +56,7 @@ describe('video job persistence', () => {
 
     expect(job).toEqual({
       id: 'job-1', ownerId: 'owner', ownerType: 'user', sessionId: 'session', messageId: 'message',
-      userMessageId: 'user-message', prompt: 'make a video', upstreamTaskId: '', status: 'pending',
+      userMessageId: 'user-message', prompt: 'make a video', upstreamTaskId: '', videoAssetIds: [], status: 'pending',
       stage: 'created', error: '', createdAt: 101, updatedAt: 101,
     });
     expect(harness.data().videoJobs['job-1']).toEqual(job);
@@ -87,12 +91,15 @@ describe('video job persistence', () => {
     const harness = createHarness({ videoJobs: {
       a: { id: 'a', status: 'processing', upstreamTaskId: 'up-a' },
       b: { id: 'b', status: 'pending', upstreamTaskId: '' },
-      c: { id: 'c', status: 'completed', upstreamTaskId: 'up-c' },
+      c: { id: 'c', status: 'completed', upstreamTaskId: 'up-c', videoAssetIds: ['asset-c'] },
     } });
 
     expect(harness.store.getRecoveryPlan()).toEqual({
       recoverable: [{ id: 'a', status: 'processing', upstreamTaskId: 'up-a' }],
       unknownSubmission: [{ id: 'b', status: 'pending', upstreamTaskId: '' }],
+      staleAssets: [{
+        id: 'c', status: 'completed', upstreamTaskId: 'up-c', videoAssetIds: ['asset-c'],
+      }],
     });
   });
 

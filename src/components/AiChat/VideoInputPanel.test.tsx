@@ -6,55 +6,64 @@ import { VideoInputPanel } from './VideoInputPanel';
 
 afterEach(cleanup);
 
-describe('VideoInputPanel', () => {
-  it('separates first frame, last frame, and three-view reference controls', () => {
-    const onPick = vi.fn();
-    render(<VideoInputPanel
-      inputs={{ image: '', lastFrame: '', referenceImages: [] }}
-      busy={false}
-      onPick={onPick}
-      onRemove={vi.fn()}
-    />);
+function renderPanel(patch = {}) {
+  const props = {
+    inputs: {
+      videoModel: 'seedance_1_5_pro_720p' as const,
+      image: '',
+      lastFrame: '',
+      referenceImages: [],
+      inputMode: 'frames' as const,
+      durationSeconds: 5,
+      aspectRatio: 'adaptive' as const,
+    },
+    busy: false,
+    onPick: vi.fn(),
+    onRemove: vi.fn(),
+    onInputModeChange: vi.fn(),
+    onModelChange: vi.fn(),
+    onDurationChange: vi.fn(),
+    onAspectRatioChange: vi.fn(),
+    ...patch,
+  };
+  return { ...render(<VideoInputPanel {...props} />), props };
+}
 
-    const first = screen.getByRole('button', { name: '添加首帧' });
-    const last = screen.getByRole('button', { name: '添加尾帧' }) as HTMLButtonElement;
-    const references = screen.getByRole('button', { name: '添加角色参考图' });
-    expect(first.className).toContain('min-h-11');
-    expect(last.className).toContain('min-h-11');
-    expect(references.className).toContain('min-h-11');
-    expect(last.disabled).toBe(true);
-    expect(screen.getByText('三视图 0/3')).toBeTruthy();
+describe('Seedance 1.5 video toolbar', () => {
+  it('offers 720p and 480p models and no retired 2.0 choices', () => {
+    const onModelChange = vi.fn();
+    renderPanel({ onModelChange });
+    fireEvent.click(screen.getByRole('button', { name: /720p/ }));
 
-    fireEvent.click(first);
-    fireEvent.click(references);
-    expect(onPick).toHaveBeenNthCalledWith(1, 'image');
-    expect(onPick).toHaveBeenNthCalledWith(2, 'referenceImages');
+    expect(screen.getByRole('menuitemradio', { name: /Seedance 1\.5 Pro 720p/ })).toBeTruthy();
+    expect(screen.getByRole('menuitemradio', { name: /Seedance 1\.5 Pro 480p/ })).toBeTruthy();
+    expect(screen.queryByRole('menuitemradio', { name: /Seedance 2\.0/ })).toBeNull();
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /Seedance 1\.5 Pro 480p/ }));
+    expect(onModelChange).toHaveBeenCalledWith('seedance_1_5_pro_480p');
   });
 
-  it('enables and labels populated inputs with independent removal', () => {
+  it('shows first/last frame controls and hides reference-image mode', () => {
     const onPick = vi.fn();
-    const onRemove = vi.fn();
-    render(<VideoInputPanel
-      inputs={{
-        image: 'data:image/jpeg;base64,first',
-        lastFrame: 'data:image/jpeg;base64,last',
-        referenceImages: ['data:image/jpeg;base64,front', 'data:image/jpeg;base64,side'],
-      }}
-      busy={false}
-      onPick={onPick}
-      onRemove={onRemove}
-    />);
+    renderPanel({ onPick });
+    fireEvent.click(screen.getByRole('button', { name: /素材 0/ }));
 
-    expect((screen.getByRole('button', { name: '更换尾帧' }) as HTMLButtonElement).disabled).toBe(false);
-    expect(screen.getByText('三视图 2/3')).toBeTruthy();
-    expect(screen.getByAltText('视频首帧')).toBeTruthy();
-    expect(screen.getByAltText('视频尾帧')).toBeTruthy();
-    expect(screen.getByAltText('角色参考图 1')).toBeTruthy();
-    expect(screen.getByAltText('角色参考图 2')).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: /添加首帧/ })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: /添加尾帧/ })).toBeTruthy();
+    expect(screen.queryByRole('menuitemradio', { name: /参考图模式/ })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: /添加参考图/ })).toBeNull();
+    fireEvent.click(screen.getByRole('menuitem', { name: /添加首帧/ }));
+    expect(onPick).toHaveBeenCalledWith('image');
+  });
 
-    fireEvent.click(screen.getByRole('button', { name: '移除尾帧' }));
-    fireEvent.click(screen.getByRole('button', { name: '移除角色参考图 2' }));
-    expect(onRemove).toHaveBeenNthCalledWith(1, 'lastFrame');
-    expect(onRemove).toHaveBeenNthCalledWith(2, 'referenceImages', 1);
+  it('offers automatic and 4-12 second duration choices plus documented ratios', () => {
+    const onDurationChange = vi.fn();
+    const onAspectRatioChange = vi.fn();
+    renderPanel({ onDurationChange, onAspectRatioChange });
+    fireEvent.click(screen.getByRole('button', { name: /时长 5 秒/ }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: '自动' }));
+    expect(onDurationChange).toHaveBeenCalledWith(-1);
+    fireEvent.click(screen.getByRole('button', { name: /比例 自适应/ }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: '9:16' }));
+    expect(onAspectRatioChange).toHaveBeenCalledWith('9:16');
   });
 });

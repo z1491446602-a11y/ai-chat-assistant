@@ -2,22 +2,23 @@ import fs from 'fs';
 
 const PRIVATE_DIRECTORY_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
-const LEGACY_DATA_KEYS = [
-  'users',
-  'accounts',
-  'friendChats',
-  'announcement',
-  'videoCalls',
-];
 const OBJECT_COLLECTION_KEYS = [
   'aiSessions',
   'videoJobs',
   'mediaRequests',
   'authUsers',
   'authSessions',
+];
+const DISCARDED_DATA_KEYS = new Set([
+  'users',
+  'accounts',
+  'friendChats',
+  'announcement',
+  'videoCalls',
   'redeemCodes',
   'pointReservations',
-];
+  'pointTransactions',
+]);
 
 function invalidPersistedData(message) {
   return Object.assign(
@@ -33,9 +34,6 @@ export function createEmptyData() {
     mediaRequests: {},
     authUsers: {},
     authSessions: {},
-    redeemCodes: {},
-    pointReservations: {},
-    pointTransactions: [],
   };
 }
 
@@ -43,28 +41,22 @@ export function normalizeData(data) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     throw invalidPersistedData('top-level value must be an object');
   }
-  const normalized = data;
+  const normalized = Object.fromEntries(
+    Object.entries(data).filter(([key]) => !DISCARDED_DATA_KEYS.has(key)),
+  );
 
   for (const key of OBJECT_COLLECTION_KEYS) {
-    if (!Object.hasOwn(normalized, key)) {
+    if (!Object.hasOwn(data, key)) {
       normalized[key] = {};
     } else if (
-      !normalized[key]
-      || typeof normalized[key] !== 'object'
-      || Array.isArray(normalized[key])
+      !data[key]
+      || typeof data[key] !== 'object'
+      || Array.isArray(data[key])
     ) {
       throw invalidPersistedData(`${key} must be an object`);
+    } else {
+      normalized[key] = data[key];
     }
-  }
-
-  if (!Object.hasOwn(normalized, 'pointTransactions')) {
-    normalized.pointTransactions = [];
-  } else if (!Array.isArray(normalized.pointTransactions)) {
-    throw invalidPersistedData('pointTransactions must be an array');
-  }
-
-  for (const key of LEGACY_DATA_KEYS) {
-    delete normalized[key];
   }
 
   return normalized;
@@ -110,11 +102,11 @@ function readJsonFile(filePath) {
   return JSON.parse(file);
 }
 
-function containsLegacyData(data) {
+function containsDiscardedData(data) {
   return Boolean(
     data
     && typeof data === 'object'
-    && LEGACY_DATA_KEYS.some(key => Object.hasOwn(data, key)),
+    && Object.keys(data).some(key => DISCARDED_DATA_KEYS.has(key)),
   );
 }
 
@@ -210,7 +202,7 @@ export function createDataStore({
       return;
     }
 
-    if (containsLegacyData(rawData)) {
+    if (containsDiscardedData(rawData)) {
       const { serialized } = serializeNormalizedData(rawData);
       replacePrivateJsonFile(filePath, serialized);
     }
@@ -305,8 +297,8 @@ export function createDataStore({
       throw error;
     }
 
-    const hadLegacyData = containsLegacyData(rawData);
-    if (hadLegacyData) {
+    const hadDiscardedData = containsDiscardedData(rawData);
+    if (hadDiscardedData) {
       persistSanitizedPrimary(normalizedData);
     } else {
       scrubAuxiliaryLegacyFiles();

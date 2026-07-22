@@ -27,19 +27,6 @@ function readBoolean(name, defaultValue) {
   throw new Error(`${name} must be true or false`);
 }
 
-function readRedeemCodeHmacSecret() {
-  const value = typeof process.env.REDEEM_CODE_HMAC_SECRET === 'string'
-    ? process.env.REDEEM_CODE_HMAC_SECRET
-    : '';
-  if (!value && process.env.NODE_ENV === 'production') {
-    throw new Error('REDEEM_CODE_HMAC_SECRET is required in production');
-  }
-  if (value && Buffer.byteLength(value, 'utf8') < 32) {
-    throw new Error('REDEEM_CODE_HMAC_SECRET must contain at least 32 bytes');
-  }
-  return value;
-}
-
 function isPrivateUpstreamHostname(hostname) {
   const normalized = String(hostname || '')
     .toLowerCase()
@@ -140,10 +127,29 @@ function isExplicitHttpFallbackUrl(name, value, config) {
   }
 }
 
+function isConfiguredGrokVideoHttpUrl(name, value) {
+  if (name !== 'GROK_VIDEO_API_URL') return false;
+  try {
+    const parsed = new URL(String(value || '').trim());
+    return parsed.protocol === 'http:'
+      && !parsed.username
+      && !parsed.password
+      && parsed.hostname.toLowerCase() === 'tuluo.top'
+      && parsed.port === '8000'
+      && (parsed.pathname === '' || parsed.pathname === '/');
+  } catch {
+    return false;
+  }
+}
+
 function validateUpstreamUrls(config) {
   const upstreamUrls = [
     ['CHAT_API_URL', config.DEFAULT_CHAT_API_URL],
     ['VIDEO_API_URL', config.VIDEO_API_URL],
+    ['VIDEO_QUERY_URL', config.VIDEO_QUERY_URL],
+    ['VIDEO_ASSET_API_URL', config.VIDEO_ASSET_API_URL],
+    ['GROK_VIDEO_API_URL', config.GROK_VIDEO_API_URL],
+    ['SHORT_VIDEO_PARSER_URL', config.SHORT_VIDEO_PARSER_URL],
     ['DEEPSEEK_VOICE_CHAT_API_URL', config.DEEPSEEK_VOICE_CHAT_API_URL],
     ['MIMO_CHAT_API_URL', config.MIMO_CHAT_API_URL],
     ['IMAGE_API_URL', config.DEFAULT_IMAGE_API_URL],
@@ -159,7 +165,9 @@ function validateUpstreamUrls(config) {
   ];
   const invalidNames = upstreamUrls
     .filter(([, url]) => typeof url === 'string' && url.trim())
-    .filter(([name, url]) => !isSecureUpstreamUrl(url) && !isExplicitHttpFallbackUrl(name, url, config))
+    .filter(([name, url]) => !isSecureUpstreamUrl(url)
+      && !isExplicitHttpFallbackUrl(name, url, config)
+      && !isConfiguredGrokVideoHttpUrl(name, url))
     .map(([name]) => name);
 
   if (invalidNames.length) {
@@ -184,7 +192,7 @@ export function createServerConfig(rootDir) {
   const imageGptFallbackEditUrl = process.env.IMAGE_GPT_FALLBACK_EDIT_URL
     || (imageGptFallbackBaseUrl ? `${imageGptFallbackBaseUrl}/v1/images/edits` : '');
   const imageGptFallbackAllowHttp = readBoolean('IMAGE_GPT_FALLBACK_ALLOW_HTTP', false);
-  const videoAllowedHosts = (process.env.VIDEO_DOWNLOAD_HOSTS || process.env.VIDEO_ALLOWED_HOSTS || 'opcbucket.oss-cn-beijing.aliyuncs.com')
+  const videoAllowedHosts = (process.env.VIDEO_DOWNLOAD_HOSTS || process.env.VIDEO_ALLOWED_HOSTS || 'opcbucket.oss-cn-beijing.aliyuncs.com,vidgen.x.ai')
     .split(',')
     .map(host => host.trim().toLowerCase())
     .filter((host, index, hosts) => host && hosts.indexOf(host) === index);
@@ -192,6 +200,7 @@ export function createServerConfig(rootDir) {
   const voiceReplySystemPrompt = process.env.VOICE_REPLY_SYSTEM_PROMPT || '你现在要为语音朗读生成最终回复文本。目标是让下游语音读出来像真人当下自然回应。直接输出最终答复，不要输出思考过程，不要使用 Markdown、标题、列表、代码块、表格、公式标记，也不要输出 #、*、**、LaTeX 这类符号。请使用日常口语，不要书面腔，不要像客服话术。根据用户语境自然匹配语气：安慰时温和，开心时轻快，解释时耐心清楚，暧昧或亲近语境时自然一点，但不要油腻、不要夸张。可以少量使用“嗯”“好呀”“其实”“我觉得”这类口语连接词，但仅在合适时使用，不要每句都带。避免连续感叹号、重复笑声、拟声词堆砌和过多语气词。优先控制在 1 到 3 句、120 字以内；只有用户明确要求详细解释时再适度展开。';
 
   const config = {
+    HOST: process.env.HOST || '127.0.0.1',
     PORT: Number(process.env.PORT || 3000),
     AUTH_COOKIE_NAME: process.env.AUTH_COOKIE_NAME?.trim() || 'chat_auth',
     AUTH_COOKIE_SECURE: readBoolean(
@@ -204,18 +213,29 @@ export function createServerConfig(rootDir) {
     ADMIN_PHONE: process.env.ADMIN_PHONE?.trim() || '',
     ADMIN_BOOTSTRAP_PASSWORD: process.env.ADMIN_BOOTSTRAP_PASSWORD || '',
     ADMIN_REAL_NAME: process.env.ADMIN_REAL_NAME?.trim() || '',
-    REDEEM_CODE_HMAC_SECRET: readRedeemCodeHmacSecret(),
     STORAGE_DIR: storageDir,
     DATA_DIR: dataDir,
     DATA_FILE: dataFile,
     DATA_BACKUP_FILE: `${dataFile}.bak`,
     UPLOAD_DIR: process.env.UPLOAD_DIR || path.join(storageDir, 'uploads'),
     VIDEO_DIR: process.env.VIDEO_DIR || path.join(storageDir, 'videos'),
-    VIDEO_API_URL: process.env.VIDEO_API_URL || 'https://api.chancexj.com/v1/videos',
+    PUBLIC_BASE_URL: String(process.env.PUBLIC_BASE_URL || '').trim().replace(/\/+$/u, ''),
+    VIDEO_API_URL: process.env.VIDEO_API_URL || 'https://api.chancexj.com/v1/seedance/videos',
+    VIDEO_QUERY_URL: process.env.VIDEO_QUERY_URL || 'https://api.chancexj.com/v1/result/{id}',
+    VIDEO_ASSET_API_URL: process.env.VIDEO_ASSET_API_URL || 'https://api.chancexj.com',
     VIDEO_API_KEY: process.env.VIDEO_API_KEY || '',
-    VIDEO_API_MODEL: process.env.VIDEO_API_MODEL || 'veo_3_1_fast',
-    VIDEO_POLL_INTERVAL_MS: Number(process.env.VIDEO_POLL_INTERVAL_MS || 10_000),
+    VIDEO_API_MODEL: process.env.VIDEO_API_MODEL || 'seedance_1_5_pro_720p',
+    VIDEO_POLL_INTERVAL_MS: Number(process.env.VIDEO_POLL_INTERVAL_MS || 20_000),
+    VIDEO_ASSET_POLL_INTERVAL_MS: Number(process.env.VIDEO_ASSET_POLL_INTERVAL_MS || 5_000),
+    VIDEO_ASSET_TIMEOUT_MS: Number(process.env.VIDEO_ASSET_TIMEOUT_MS || 300_000),
     VIDEO_TIMEOUT_MS: Number(process.env.VIDEO_TIMEOUT_MS || 1_800_000),
+    GROK_VIDEO_API_URL: String(process.env.GROK_VIDEO_API_URL || '').trim().replace(/\/+$/u, ''),
+    GROK_VIDEO_API_KEY: process.env.GROK_VIDEO_API_KEY || '',
+    GROK_VIDEO_POLL_INTERVAL_MS: Number(process.env.GROK_VIDEO_POLL_INTERVAL_MS || 20_000),
+    GROK_VIDEO_TIMEOUT_MS: Number(process.env.GROK_VIDEO_TIMEOUT_MS || 1_800_000),
+    SHORT_VIDEO_PARSER_URL: String(process.env.SHORT_VIDEO_PARSER_URL || 'http://127.0.0.1:5201').trim().replace(/\/+$/u, ''),
+    SHORT_VIDEO_RATE_LIMIT_WINDOW_MS: readPositiveInteger('SHORT_VIDEO_RATE_LIMIT_WINDOW_MS', 60_000),
+    SHORT_VIDEO_RATE_LIMIT_MAX: readPositiveInteger('SHORT_VIDEO_RATE_LIMIT_MAX', 12),
     VIDEO_MAX_BYTES: Number(process.env.VIDEO_MAX_BYTES || 209_715_200),
     VIDEO_ALLOWED_HOSTS: videoAllowedHosts,
     VIDEO_DOWNLOAD_HOSTS: videoAllowedHosts,

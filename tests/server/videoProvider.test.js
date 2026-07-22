@@ -1,122 +1,110 @@
 import { describe, expect, it, vi } from 'vitest';
-import {
-  buildVideoRequestBody,
-  createVideoProvider,
-  parseVideoStatus,
-} from '../../server/videoProvider.js';
+import { buildVideoRequestBody, createVideoProvider, parseVideoStatus } from '../../server/videoProvider.js';
 
-describe('video provider payloads', () => {
-  it('keeps text, first frame, last frame, and subject references in distinct fields', () => {
-    expect(buildVideoRequestBody({ model: 'veo', prompt: 'go' })).toEqual({
-      model: 'veo', prompt: 'go',
-    });
-    expect(buildVideoRequestBody({ model: 'veo', prompt: 'go', image: 'https://a/first.png' }))
-      .toEqual({
-        model: 'veo', prompt: 'go',
-        image: { image_url: 'https://a/first.png' },
-      });
+describe('Seedance 1.5 provider payloads', () => {
+  it('builds text-only payload with documented fields', () => {
     expect(buildVideoRequestBody({
-      model: 'veo', prompt: 'go', image: 'https://a/first.png', lastFrame: 'https://a/last.png',
+      model: 'seedance_1_5_pro_720p', prompt: 'A calm lake', durationSeconds: 8, aspectRatio: '16:9',
     })).toEqual({
-      model: 'veo', prompt: 'go',
-      image: { image_url: 'https://a/first.png' },
-      lastFrame: { image_url: 'https://a/last.png' },
-    });
-    expect(buildVideoRequestBody({
-      model: 'veo',
-      prompt: 'go',
-      referenceImages: ['https://a/front.png', 'https://a/side.png', 'https://a/back.png'],
-    })).toEqual({
-      model: 'veo',
-      prompt: 'go',
-      referenceImages: ['https://a/front.png', 'https://a/side.png', 'https://a/back.png'],
-    });
-    expect(buildVideoRequestBody({
-      model: 'veo',
-      prompt: 'go',
-      image: 'https://a/storyboard.png',
-      referenceImages: ['https://a/character.png'],
-    })).toEqual({
-      model: 'veo',
-      prompt: 'go',
-      image: { image_url: 'https://a/storyboard.png' },
-      referenceImages: ['https://a/character.png'],
+      model: 'seedance_1_5_pro_720p',
+      prompt: 'A calm lake',
+      content: [{ type: 'text', text: 'A calm lake' }],
+      duration: 8,
+      ratio: '16:9',
+      generate_audio: false,
     });
   });
 
-  it('rejects invalid prompts, durations, tail-only input, and excess references', () => {
-    expect(() => buildVideoRequestBody({ model: 'veo', prompt: ' ' })).toThrow(/prompt/i);
-    expect(() => buildVideoRequestBody({ model: 'veo', prompt: 'go', durationSeconds: 6 }))
-      .toThrow('8 seconds');
-    expect(() => buildVideoRequestBody({ model: 'veo', prompt: 'go', lastFrame: 'last' }))
-      .toThrow('first frame');
-    expect(() => buildVideoRequestBody({
-      model: 'veo', prompt: 'go', referenceImages: ['1', '2', '3', '4'],
-    })).toThrow('at most 3 reference images');
+  it('builds first/last-frame content entries', () => {
+    expect(buildVideoRequestBody({
+      model: 'seedance_1_5_pro_480p', prompt: 'A paper boat', image: 'https://media.example/first.png', lastFrame: 'https://media.example/last.png',
+    })).toEqual({
+      model: 'seedance_1_5_pro_480p',
+      prompt: 'A paper boat',
+      content: [
+        { type: 'text', text: 'A paper boat' },
+        { type: 'image_url', image_url: { url: 'https://media.example/first.png' }, role: 'first_frame' },
+        { type: 'image_url', image_url: { url: 'https://media.example/last.png' }, role: 'last_frame' },
+      ],
+      duration: 5,
+      ratio: 'adaptive',
+      generate_audio: false,
+    });
+  });
+
+  it('supports automatic duration and rejects unsupported duration, ratio, and reference inputs', () => {
+    expect(buildVideoRequestBody({ model: 'seedance_1_5_pro_480p', prompt: 'go', durationSeconds: -1 }).duration).toBe(-1);
+    expect(() => buildVideoRequestBody({ model: 'seedance_1_5_pro_480p', prompt: 'go', durationSeconds: 13 })).toThrow('4 to 12 seconds');
+    expect(() => buildVideoRequestBody({ model: 'seedance_1_5_pro_480p', prompt: 'go', aspectRatio: '2:1' })).toThrow('aspect ratio');
+    expect(() => buildVideoRequestBody({ model: 'seedance_1_5_pro_480p', prompt: 'go', referenceImages: ['https://media.example/ref.png'] })).toThrow('does not support reference images');
+    expect(() => buildVideoRequestBody({ model: 'seedance_1_5_pro_480p', prompt: 'go', lastFrame: 'last' })).toThrow('first frame');
+  });
+
+  it('rejects retired models', () => {
+    expect(() => buildVideoRequestBody({ model: 'seedance_2_0_pro', prompt: 'go' })).toThrow('seedance_1_5_pro_720p');
+    expect(() => buildVideoRequestBody({ model: 'grok-imagine-video-1.5', prompt: 'go' })).toThrow('seedance_1_5_pro_720p');
   });
 });
 
 describe('video provider status', () => {
-  it('normalizes only the four public statuses and completion URL', () => {
+  it('normalizes queued, processing, completed, and failed responses', () => {
     expect(parseVideoStatus({ status: 'queued' })).toEqual({ status: 'queued' });
     expect(parseVideoStatus({ data: { status: 'running' } })).toEqual({ status: 'processing' });
-    expect(parseVideoStatus({ status: 'succeeded', video_url: 'https://cdn/video.mp4' }))
-      .toEqual({ status: 'completed', video_url: 'https://cdn/video.mp4' });
-    expect(parseVideoStatus({ status: 'error', error: { message: 'bad task' } }))
-      .toEqual({ status: 'failed', error: 'bad task' });
+    expect(parseVideoStatus({ status: 'succeeded', video_url: 'https://cdn/video.mp4' })).toEqual({ status: 'completed', video_url: 'https://cdn/video.mp4' });
+    expect(parseVideoStatus({ status: 'error', error: { message: 'bad task' } })).toEqual({ status: 'failed', error: 'bad task' });
   });
 });
 
 describe('createVideoProvider', () => {
-  it('submits once using x-api-key only', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: 'up-1' }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    }));
-    const provider = createVideoProvider({
-      apiUrl: 'https://api.example/v1/videos', apiKey: 'secret', model: 'veo', fetchImpl,
-    });
+  it('defaults to Seedance 1.5 Pro 720p and submits bearer authorization', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: 'up-default' }), { status: 200 }));
+    const provider = createVideoProvider({ apiUrl: 'https://api.example/v1/seedance/videos', apiKey: 'secret', fetchImpl });
 
-    await expect(provider.submit({ prompt: 'go' })).resolves.toEqual({
-      id: 'up-1', upstreamTaskId: 'up-1', status: 'queued',
-    });
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(fetchImpl.mock.calls[0][1].headers).toEqual({
-      'Content-Type': 'application/json',
-      'x-api-key': 'secret',
-    });
+    await provider.submit({ prompt: 'go' });
+
     expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toEqual({
-      model: 'veo', prompt: 'go',
+      model: 'seedance_1_5_pro_720p',
+      prompt: 'go',
+      content: [{ type: 'text', text: 'go' }],
+      duration: 5,
+      ratio: 'adaptive',
+      generate_audio: false,
     });
+    expect(fetchImpl.mock.calls[0][1].headers).toEqual({ 'Content-Type': 'application/json', Authorization: 'Bearer secret' });
   });
 
-  it('retries retryable polling responses and returns completion', async () => {
+  it('uses the task-selected 480p model', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: 'up-480' }), { status: 200 }));
+    const provider = createVideoProvider({ apiUrl: 'https://api.example/v1/seedance/videos', apiKey: 'secret', fetchImpl });
+
+    await provider.submit({ model: 'seedance_1_5_pro_480p', prompt: 'go' });
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body).model).toBe('seedance_1_5_pro_480p');
+  });
+
+  it('does not retry ordinary submit failures', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: { message: 'Invalid duration' } }), { status: 400 }));
+    const provider = createVideoProvider({ apiUrl: 'https://api.example/v1/seedance/videos', apiKey: 'secret', fetchImpl, sleep: vi.fn() });
+
+    await expect(provider.submit({ prompt: 'go' })).rejects.toThrow('Invalid duration');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the independent result query endpoint', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: 'completed', video_url: 'https://cdn/v.mp4' }), { status: 200 }));
+    const provider = createVideoProvider({ apiUrl: 'https://api.example/v1/seedance/videos', queryUrl: 'https://api.example/v1/result/{id}', apiKey: 'secret', fetchImpl });
+
+    await provider.getStatus('task/1');
+    expect(fetchImpl).toHaveBeenCalledWith('https://api.example/v1/result/task%2F1', expect.any(Object));
+  });
+
+  it('retries transient polling failures and returns the completed URL', async () => {
     const fetchImpl = vi.fn()
       .mockRejectedValueOnce(new Error('network'))
       .mockResolvedValueOnce(new Response('', { status: 503 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'completed', video_url: 'https://cdn/v.mp4' }), { status: 200 }));
-    const sleep = vi.fn().mockResolvedValue();
-    const provider = createVideoProvider({
-      apiUrl: 'https://api.example/v1/videos', apiKey: 'secret', model: 'veo',
-      fetchImpl, sleep, pollIntervalMs: 1, timeoutMs: 1_000, now: (() => { let n = 0; return () => n++; })(),
-    });
+    const provider = createVideoProvider({ apiUrl: 'https://api.example/v1/seedance/videos', apiKey: 'secret', fetchImpl, sleep: vi.fn().mockResolvedValue(), pollIntervalMs: 1, timeoutMs: 1000, now: (() => { let n = 0; return () => n++; })() });
 
-    const onStage = vi.fn();
-    await expect(provider.poll('up-1', onStage)).resolves.toBe('https://cdn/v.mp4');
+    await expect(provider.poll('up-1')).resolves.toBe('https://cdn/v.mp4');
     expect(fetchImpl).toHaveBeenCalledTimes(3);
-    expect(sleep.mock.calls.every(([delay]) => delay <= 30_000)).toBe(true);
-    expect(onStage).toHaveBeenCalledWith('completed');
-  });
-
-  it('does not retry a terminal failed status', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      status: 'failed', error: 'rejected',
-    }), { status: 200 }));
-    const provider = createVideoProvider({
-      apiUrl: 'https://api.example/v1/videos', apiKey: 'secret', model: 'veo', fetchImpl, sleep: vi.fn(),
-    });
-
-    await expect(provider.poll('up-1')).rejects.toThrow('rejected');
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });

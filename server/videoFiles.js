@@ -171,11 +171,20 @@ export function createVideoFileStore({
     return result;
   }
 
+  function createExternalVideoReference(videoUrl) {
+    const parsedUrl = validateVideoUrl(videoUrl, allowedHosts);
+    return {
+      videoUrl: parsedUrl.toString(),
+      videoMimeType: 'video/mp4',
+    };
+  }
+
   return {
     ensureVideoDir,
     download,
     downloadVideo: download,
     downloadValidateAndSave,
+    createExternalVideoReference,
     inspectExistingVideo,
   };
 }

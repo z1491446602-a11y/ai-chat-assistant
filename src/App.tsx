@@ -2,10 +2,13 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import {
   Clock3,
   DatabaseZap,
+  Home,
   Plus,
   Sparkles,
   Trash2,
 } from 'lucide-react';
+import { HomePage } from '@/components/HomePage';
+import { ShortVideoTool } from '@/components/ShortVideoTool';
 import { useChatStore } from '@/store';
 import {
   clearServerAiSessions,
@@ -17,13 +20,12 @@ import type { Session } from '@/types';
 import { getAiOwner } from '@/utils/aiOwner';
 import {
   adminResetPassword,
+  fetchAdminUsers,
   fetchCurrentUser,
-  fetchPointTransactions,
-  generateRedeemCode,
   login as loginAccount,
   logout as logoutAccount,
-  redeemCode as redeemAccountCode,
   register as registerAccount,
+  updateMediaPermissions,
   type AuthStatus,
   type AuthUser,
   type AdminResetPasswordInput,
@@ -46,32 +48,6 @@ function AiSurfaceLoading() {
       className="flex h-full items-center justify-center text-sm text-slate-400"
     >
       加载中…
-    </div>
-  );
-}
-
-function LegalRecordLinks() {
-  return (
-    <div className="mt-3 rounded-2xl border border-sky-100/80 bg-white/78 px-3 py-3 text-center text-[11px] leading-5 text-slate-500 shadow-[0_10px_24px_rgba(37,99,235,0.06)]">
-      <div className="mb-1 text-[11px] font-medium text-slate-400">
-        {'\u5907\u6848\u4fe1\u606f'}
-      </div>
-      <a
-        href="https://beian.miit.gov.cn/"
-        target="_blank"
-        rel="noreferrer"
-        className="block truncate transition-colors hover:text-sky-700"
-      >
-        {'\u8c6bICP\u59072026027242\u53f7'}
-      </a>
-      <a
-        href="https://beian.mps.gov.cn/#/query/webSearch?code=41010502007797"
-        target="_blank"
-        rel="noreferrer"
-        className="mt-0.5 block truncate transition-colors hover:text-sky-700"
-      >
-        {'\u8c6b\u516c\u7f51\u5b89\u590741010502007797\u53f7'}
-      </a>
     </div>
   );
 }
@@ -142,6 +118,7 @@ function AppSidebar({
   onDeleteAiSession,
   onClearAiSessions,
   onClearLocalCache,
+  onGoHome,
 }: {
   open: boolean;
   interactionEnabled: boolean;
@@ -153,6 +130,7 @@ function AppSidebar({
   onDeleteAiSession: (sessionId: string) => void;
   onClearAiSessions: () => void;
   onClearLocalCache: () => void;
+  onGoHome: () => void;
 }) {
   return (
     <>
@@ -285,6 +263,14 @@ function AppSidebar({
         <div className="border-t border-sky-100/80 p-4">
           <button
             type="button"
+            onClick={onGoHome}
+            className="tech-hover-float mb-1 flex min-h-11 w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-slate-500 transition-colors hover:bg-sky-50 hover:text-sky-700"
+          >
+            <Home className="h-5 w-5" />
+            <span className="text-[15px] font-medium">返回首页</span>
+          </button>
+          <button
+            type="button"
             onClick={onClearLocalCache}
             disabled={!interactionEnabled}
             className="tech-hover-float flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-slate-500 transition-colors hover:bg-sky-50 hover:text-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
@@ -295,7 +281,6 @@ function AppSidebar({
               <span className="block text-xs text-slate-400">不删除云端聊天记录</span>
             </span>
           </button>
-          <LegalRecordLinks />
         </div>
       </aside>
 
@@ -310,7 +295,7 @@ function AppSidebar({
   );
 }
 
-export function App() {
+function ChatApp({ onGoHome }: { onGoHome: () => void }) {
   const sessions = useChatStore((state) => state.sessions);
   const currentSessionId = useChatStore((state) => state.currentSessionId);
   const selectSession = useChatStore((state) => state.selectSession);
@@ -494,18 +479,6 @@ export function App() {
     setAccountDialogOpen(false);
   }, [runAccountAction, switchAccount]);
 
-  const handleRedeem = useCallback(async (code: string) => {
-    const user = await runAccountAction(() => redeemAccountCode(code));
-    accountGenerationRef.current += 1;
-    accountRefreshRef.current = null;
-    authUserIdRef.current = user.id;
-    setAuthUser(user);
-  }, [runAccountAction]);
-
-  const handleGenerateCode = useCallback((points: number) => (
-    runAccountAction(() => generateRedeemCode(points))
-  ), [runAccountAction]);
-
   const handleAdminResetPassword = useCallback(async (input: AdminResetPasswordInput) => {
     const result = await runAccountAction(() => adminResetPassword(
       input.phone,
@@ -555,7 +528,7 @@ export function App() {
           return true;
         } catch (error) {
           if (mountedRef.current) {
-            console.error('Failed to refresh account balance', error);
+            console.error('Failed to refresh account information', error);
           }
           return false;
         }
@@ -702,7 +675,7 @@ export function App() {
   };
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-[radial-gradient(circle_at_top,rgba(59,130,246,0.16),transparent_32%),radial-gradient(circle_at_20%_18%,rgba(56,189,248,0.14),transparent_22%),linear-gradient(180deg,#f4f9ff_0%,#eaf3ff_48%,#edf5ff_100%)]">
+    <div className="flex h-[100dvh] flex-col overflow-hidden bg-[radial-gradient(circle_at_top,rgba(59,130,246,0.16),transparent_32%),radial-gradient(circle_at_20%_18%,rgba(56,189,248,0.14),transparent_22%),linear-gradient(180deg,#f4f9ff_0%,#eaf3ff_48%,#edf5ff_100%)]">
       <SidebarToggleButton open={showMenu} onClick={() => setShowMenu((value) => !value)} />
 
       <AppSidebar
@@ -716,6 +689,7 @@ export function App() {
         onDeleteAiSession={handleDeleteAiSession}
         onClearAiSessions={handleClearAiSessions}
         onClearLocalCache={handleClearLocalCache}
+        onGoHome={onGoHome}
       />
 
       <div className="min-h-0 flex-1">
@@ -729,7 +703,6 @@ export function App() {
             refreshAiSessions={refreshAiSessions}
             onRequireLogin={handleOpenAccountDialog}
             onAccountClick={handleOpenAccountDialog}
-            onMediaTaskSettled={refreshAccount}
           />
         </Suspense>
       </div>
@@ -744,13 +717,48 @@ export function App() {
             onLogin={handleLogin}
             onRegister={handleRegister}
             onLogout={handleLogout}
-            onRedeem={handleRedeem}
-            onLoadTransactions={fetchPointTransactions}
-            onGenerateCode={handleGenerateCode}
+            onLoadUsers={fetchAdminUsers}
+            onUpdatePermissions={updateMediaPermissions}
             onResetPassword={handleAdminResetPassword}
           />
         </Suspense>
       )}
     </div>
   );
+}
+
+function isChatPath(pathname: string) {
+  return pathname === '/chat' || pathname.startsWith('/chat/');
+}
+
+type AppRoute = '/' | '/chat' | '/short-videos';
+
+function getAppRoute(pathname: string): AppRoute {
+  if (isChatPath(pathname)) return '/chat';
+  if (pathname === '/short-videos') return '/short-videos';
+  return '/';
+}
+
+export function App() {
+  const [route, setRoute] = useState<AppRoute>(() => getAppRoute(window.location.pathname));
+
+  useEffect(() => {
+    const handlePopState = () => setRoute(getAppRoute(window.location.pathname));
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const navigate = useCallback((path: AppRoute) => {
+    if (window.location.pathname !== path) {
+      window.history.pushState({}, '', path);
+    }
+    setRoute(path);
+    window.scrollTo({ top: 0, left: 0 });
+  }, []);
+
+  return route === '/chat'
+    ? <ChatApp onGoHome={() => navigate('/')} />
+    : route === '/short-videos'
+      ? <ShortVideoTool onGoHome={() => navigate('/')} onOpenChat={() => navigate('/chat')} />
+      : <HomePage onOpenChat={() => navigate('/chat')} onOpenShortVideo={() => navigate('/short-videos')} />;
 }

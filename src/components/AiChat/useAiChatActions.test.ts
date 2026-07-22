@@ -3,7 +3,7 @@
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AiTaskOwner } from '@/services/api';
-import type { Session } from '@/types';
+import type { Session, VideoGenerationInputs } from '@/types';
 import { useAiChatActions } from './useAiChatActions';
 
 const mocks = vi.hoisted(() => ({
@@ -49,7 +49,7 @@ interface RenderActionsOptions {
   effectiveImageGenerationMode?: boolean;
   isVideoGenerationMode?: boolean;
   enabled?: boolean;
-  videoInputs?: { image: string; lastFrame: string; referenceImages: string[] };
+  videoInputs?: VideoGenerationInputs;
 }
 
 function renderActions(aiOwner: AiTaskOwner, options: RenderActionsOptions = {}) {
@@ -89,7 +89,6 @@ function renderActions(aiOwner: AiTaskOwner, options: RenderActionsOptions = {})
     setPendingAiFiles: vi.fn(),
     setPendingAiVideoInputs: vi.fn(),
     setShowMoreActions: vi.fn(),
-    setShowImageProviderMenu: vi.fn(),
     setIsImageGenerationMode: vi.fn(),
     setIsVideoGenerationMode: vi.fn(),
   }));
@@ -236,6 +235,43 @@ describe('useAiChatActions owner wire contract', () => {
       [],
       expect.any(Object),
     );
+  });
+
+  it('uses Seedance 2.0 Pro when creating a video session', async () => {
+    const { result } = renderActions({ userId: 'video-user' }, {
+      currentSessionId: null,
+      aiSessions: [],
+      input: 'Generate video',
+      isVideoGenerationMode: true,
+    });
+
+    await act(async () => {
+      await result.current.handleSendAiMessage();
+    });
+
+    expect(mocks.createServerAiSession).toHaveBeenCalledWith({ userId: 'video-user' }, 'seedance_1_5_pro_720p');
+  });
+
+  it('uses the selected 480p model when creating a video session', async () => {
+    const { result } = renderActions({ userId: 'video-user' }, {
+      currentSessionId: null,
+      aiSessions: [],
+      input: 'Generate video faster',
+      isVideoGenerationMode: true,
+      videoInputs: {
+        videoModel: 'seedance_1_5_pro_480p',
+        image: '',
+        lastFrame: '',
+        referenceImages: [],
+      },
+    });
+
+    await act(async () => {
+      await result.current.handleSendAiMessage();
+    });
+
+    expect(mocks.createServerAiSession)
+      .toHaveBeenCalledWith({ userId: 'video-user' }, 'seedance_1_5_pro_480p');
   });
 
   it.each([

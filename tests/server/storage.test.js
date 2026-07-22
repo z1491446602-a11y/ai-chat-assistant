@@ -10,7 +10,16 @@ import {
 } from '../../server/storage.js';
 
 const temporaryRoots = [];
-const LEGACY_KEYS = ['users', 'accounts', 'friendChats', 'announcement', 'videoCalls'];
+const LEGACY_KEYS = [
+  'users',
+  'accounts',
+  'friendChats',
+  'announcement',
+  'videoCalls',
+  'redeemCodes',
+  'pointReservations',
+  'pointTransactions',
+];
 
 function createHarness() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'chat-data-store-'));
@@ -75,9 +84,6 @@ describe('createDataStore', () => {
     ['mediaRequests', { mediaRequests: [] }],
     ['authUsers', { authUsers: [] }],
     ['authSessions', { authSessions: 'corrupted' }],
-    ['redeemCodes', { redeemCodes: null }],
-    ['pointReservations', { pointReservations: [] }],
-    ['pointTransactions', { pointTransactions: {} }],
   ])('fails closed when persisted %s has the wrong schema', (_label, value) => {
     expect(() => normalizeData(value)).toThrowError(
       expect.objectContaining({ code: 'INVALID_PERSISTED_DATA' }),
@@ -148,8 +154,8 @@ describe('createDataStore', () => {
 
   it('does not overwrite files when both primary and backup have invalid schemas', () => {
     const paths = createHarness();
-    const invalidPrimary = { ...createEmptyData(), pointReservations: [] };
-    const invalidBackup = { ...createEmptyData(), pointTransactions: {} };
+    const invalidPrimary = { ...createEmptyData(), authUsers: [] };
+    const invalidBackup = { ...createEmptyData(), authSessions: [] };
     writeJson(paths.dataFile, invalidPrimary);
     writeJson(paths.dataBackupFile, invalidBackup);
 

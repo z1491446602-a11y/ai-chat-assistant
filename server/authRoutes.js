@@ -1,12 +1,9 @@
-import { MAX_REDEEM_CODE_UNITS } from './pointsService.js';
-
 const DEFAULT_COOKIE_NAME = 'chat_auth';
 const DEFAULT_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1_000;
 const DEFAULT_RATE_LIMIT_MAX = 10;
 const COOKIE_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u;
-const REDEEM_CODE_PATTERN = /^[A-Za-z0-9]{8}$/u;
-const JSON_API_PATHS = ['/api/auth', '/api/points', '/api/admin'];
+const JSON_API_PATHS = ['/api/auth', '/api/admin'];
 const PUBLIC_CACHEABLE_API_PATHS = new Set(['/api/daily-suggestions']);
 
 const PUBLIC_ERRORS = Object.freeze({
@@ -15,20 +12,8 @@ const PUBLIC_ERRORS = Object.freeze({
   INVALID_REAL_NAME: { status: 422, message: '真实姓名格式不正确' },
   PHONE_ALREADY_REGISTERED: { status: 409, message: '该手机号已注册' },
   INVALID_CREDENTIALS: { status: 401, message: '手机号或密码错误' },
-  INVALID_REDEEM_CODE: { status: 422, message: '兑换码无效' },
-  REDEEM_CODE_ALREADY_USED: { status: 409, message: '兑换码已被使用' },
-  REDEEM_CODE_LIMIT_REACHED: { status: 409, message: '未使用兑换码数量已达上限，请先使用现有码' },
-  REDEEM_CODE_POINT_LIMIT_EXCEEDED: {
-    status: 422,
-    message: '积分必须为 0.1 至 1000000，且最多保留一位小数',
-  },
-  INVALID_POINT_UNITS: {
-    status: 422,
-    message: '积分必须为 0.1 至 1000000，且最多保留一位小数',
-  },
-  POINT_BALANCE_LIMIT_EXCEEDED: { status: 409, message: '积分余额已达上限' },
-  INSUFFICIENT_POINTS: { status: 402, message: '积分不足' },
   USER_NOT_FOUND: { status: 401, message: '登录状态已失效，请重新登录' },
+  ACCOUNT_NOT_FOUND: { status: 404, message: '账号不存在' },
   ACCOUNT_IDENTITY_MISMATCH: { status: 404, message: '手机号或真实姓名不匹配' },
 });
 
@@ -71,18 +56,6 @@ function serializeCookie(name, value, { maxAgeSeconds, secure, clear = false }) 
   ];
   if (clear) attributes.push('Expires=Thu, 01 Jan 1970 00:00:00 GMT');
   return attributes.join('; ');
-}
-
-export function parsePointUnits(points) {
-  const normalized = typeof points === 'number' || typeof points === 'string'
-    ? String(points).trim()
-    : '';
-  if (!/^(?:0\.[1-9]|[1-9]\d*(?:\.\d)?)$/u.test(normalized)) return null;
-
-  const units = Number(normalized) * 10;
-  return Number.isSafeInteger(units) && units > 0 && units <= MAX_REDEEM_CODE_UNITS
-    ? units
-    : null;
 }
 
 export function createIpRateLimiter({
@@ -145,7 +118,6 @@ function publicError(error) {
 export function registerAuthRoutes(app, dependencies = {}) {
   const {
     authService,
-    pointsService,
     cookieName = DEFAULT_COOKIE_NAME,
     cookieSecure = false,
     sessionTtlMs = DEFAULT_SESSION_TTL_MS,
@@ -158,8 +130,8 @@ export function registerAuthRoutes(app, dependencies = {}) {
   if (!app || typeof app.use !== 'function') {
     throw new TypeError('registerAuthRoutes requires an Express app');
   }
-  if (!authService || !pointsService) {
-    throw new TypeError('registerAuthRoutes requires authService and pointsService');
+  if (!authService) {
+    throw new TypeError('registerAuthRoutes requires authService');
   }
   if (typeof jsonParser !== 'function') {
     throw new TypeError('registerAuthRoutes requires a JSON parser');
@@ -190,16 +162,6 @@ export function registerAuthRoutes(app, dependencies = {}) {
       secure: Boolean(cookieSecure),
       clear: true,
     }));
-  }
-
-  function withPoints(user) {
-    if (!user) return null;
-    const { balanceUnits, availableUnits } = pointsService.getBalance(user.id);
-    return {
-      ...user,
-      points: balanceUnits / 10,
-      availablePoints: availableUnits / 10,
-    };
   }
 
   function sendError(res, error) {
@@ -233,14 +195,6 @@ export function registerAuthRoutes(app, dependencies = {}) {
       return;
     }
     next(error);
-  }
-
-  function requireLogin(req, res, next) {
-    if (req.authUser) {
-      next();
-      return;
-    }
-    res.status(401).json({ error: '请先登录' });
   }
 
   function requireAdmin(req, res, next) {
@@ -286,7 +240,7 @@ export function registerAuthRoutes(app, dependencies = {}) {
     await authService.register(credentials);
     const login = await authService.login(credentials);
     setSessionCookie(res, login.token);
-    res.status(201).json({ user: withPoints(login.user) });
+    res.status(201).json({ user: login.user });
   }));
 
   app.post('/api/auth/login', rateLimitAuth, asyncRoute(async (req, res) => {
@@ -295,7 +249,7 @@ export function registerAuthRoutes(app, dependencies = {}) {
       password: req.body?.password,
     });
     setSessionCookie(res, login.token);
-    res.json({ user: withPoints(login.user) });
+    res.json({ user: login.user });
   }));
 
   app.post('/api/auth/logout', asyncRoute(async (req, res) => {
@@ -305,40 +259,19 @@ export function registerAuthRoutes(app, dependencies = {}) {
   }));
 
   app.get('/api/auth/me', asyncRoute(async (req, res) => {
-    res.json({ user: withPoints(req.authUser) });
+    res.json({ user: req.authUser });
   }));
 
-  app.post('/api/points/redeem', requireLogin, asyncRoute(async (req, res) => {
-    const code = typeof req.body?.code === 'string' ? req.body.code.trim() : '';
-    if (!REDEEM_CODE_PATTERN.test(code)) {
-      throw Object.assign(new Error('Invalid redeem code'), { code: 'INVALID_REDEEM_CODE' });
-    }
-    pointsService.redeemCode(req.authUser.id, code);
-    res.json({ user: withPoints(req.authUser) });
+  app.get('/api/admin/users', requireAdmin, asyncRoute(async (_req, res) => {
+    res.json({ users: authService.listUsers() });
   }));
 
-  app.get('/api/points/transactions', requireLogin, asyncRoute(async (req, res) => {
-    const transactions = pointsService.listTransactions(req.authUser.id).map(transaction => ({
-      id: transaction.id,
-      type: transaction.type,
-      points: transaction.units / 10,
-      costPoints: transaction.costUnits / 10,
-      taskType: transaction.taskType,
-      reason: transaction.reason,
-      balance: transaction.balanceUnits / 10,
-      availablePoints: transaction.availableUnits / 10,
-      createdAt: transaction.createdAt,
-    }));
-    res.json({ transactions });
-  }));
-
-  app.post('/api/admin/redeem-codes', requireAdmin, asyncRoute(async (req, res) => {
-    const units = parsePointUnits(req.body?.points);
-    if (units === null) {
-      throw Object.assign(new Error('Invalid point units'), { code: 'INVALID_POINT_UNITS' });
-    }
-    const generated = pointsService.generateRedeemCode(units);
-    res.status(201).json({ code: generated.code, points: generated.units / 10 });
+  app.post('/api/admin/users/:userId/media-permissions', requireAdmin, asyncRoute(async (req, res) => {
+    const user = authService.updateMediaPermissions(req.params.userId, {
+      imageGeneration: req.body?.imageGeneration,
+      videoGeneration: req.body?.videoGeneration,
+    });
+    res.json({ user });
   }));
 
   app.post('/api/admin/users/reset-password', requireAdmin, asyncRoute(async (req, res) => {
@@ -351,16 +284,4 @@ export function registerAuthRoutes(app, dependencies = {}) {
     res.json({ ok: true, user });
   }));
 
-  app.get('/api/admin/redeem-codes', requireAdmin, asyncRoute(async (_req, res) => {
-    const codes = pointsService.listMaskedCodes().map(record => ({
-      id: record.id,
-      maskedCode: record.maskedCode,
-      points: record.units / 10,
-      createdAt: record.createdAt,
-      used: Boolean(record.used),
-      usedBy: record.usedBy ?? null,
-      usedAt: record.usedAt ?? null,
-    }));
-    res.json({ codes });
-  }));
 }

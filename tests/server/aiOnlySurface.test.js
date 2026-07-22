@@ -13,16 +13,13 @@ const aiRoutesSource = readFileSync(
 );
 
 describe('AI-only server surface', () => {
-  it('creates only AI, account, and points storage for new installations', () => {
+  it('creates only AI and account storage for new installations', () => {
     expect(createEmptyData()).toEqual({
       aiSessions: {},
       videoJobs: {},
       mediaRequests: {},
       authUsers: {},
       authSessions: {},
-      redeemCodes: {},
-      pointReservations: {},
-      pointTransactions: [],
     });
   });
 

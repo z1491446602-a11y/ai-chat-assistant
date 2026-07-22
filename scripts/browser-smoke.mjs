@@ -302,7 +302,7 @@ if (adminPhone && adminPassword) {
   while (Date.now() < adminDeadline) {
     adminReady = await evaluate(`document.readyState === 'complete'
       && Array.from(document.querySelectorAll('button[aria-label]'))
-        .some(button => button.getAttribute('aria-label')?.startsWith('账户，当前可用'))`);
+        .some(button => button.getAttribute('aria-label')?.startsWith('账户，'))`);
     if (adminReady) break;
     await new Promise(resolve => setTimeout(resolve, 150));
   }
@@ -312,7 +312,7 @@ if (adminPhone && adminPassword) {
 
   adminDialog = await evaluate(`(() => {
     const accountButton = Array.from(document.querySelectorAll('button[aria-label]'))
-      .find(button => button.getAttribute('aria-label')?.startsWith('账户，当前可用'));
+      .find(button => button.getAttribute('aria-label')?.startsWith('账户，'));
     accountButton?.click();
     return new Promise(resolve => setTimeout(() => {
       const dialog = document.querySelector('[role="dialog"]');
@@ -325,9 +325,9 @@ if (adminPhone && adminPassword) {
         });
       resolve({
         visible: Boolean(dialog && dialog.getClientRects().length),
-        hasBalance: text.includes('可用积分'),
-        hasRedeem: text.includes('兑换积分'),
-        hasAdminCode: text.includes('生成兑换码'),
+        hasUserPermissions: text.includes('用户授权'),
+        hasImagePermission: text.includes('图片生成'),
+        hasVideoPermission: text.includes('视频生成'),
         hasPasswordReset: text.includes('重置用户密码'),
         controlsMeetTouchTarget: controls.every(control => control.width >= 43.5 && control.height >= 43.5),
         overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
@@ -336,9 +336,9 @@ if (adminPhone && adminPassword) {
   })()`);
   if (
     !adminDialog.visible
-    || !adminDialog.hasBalance
-    || !adminDialog.hasRedeem
-    || !adminDialog.hasAdminCode
+    || !adminDialog.hasUserPermissions
+    || !adminDialog.hasImagePermission
+    || !adminDialog.hasVideoPermission
     || !adminDialog.hasPasswordReset
     || !adminDialog.controlsMeetTouchTarget
     || adminDialog.overflow

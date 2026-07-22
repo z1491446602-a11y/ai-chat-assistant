@@ -3,10 +3,25 @@ import { decodeBase64AudioInput } from './mediaPayload.js';
 import { getResponseErrorMessage } from './upstreamErrors.js';
 import { resolveImageTaskReferences } from './imageFollowUp.js';
 import { getRequestedImageCount } from './imageBatch.js';
-import { MEDIA_COST_UNITS } from './pointsService.js';
 import { toPublicAiErrorMessage } from './publicAiErrors.js';
 import { normalizeImageReferenceList } from './imageReferences.js';
-import { MAX_VIDEO_REFERENCE_IMAGES, VEO_FAST_DURATION_SECONDS } from './videoProvider.js';
+import {
+  DEFAULT_VIDEO_ASPECT_RATIO,
+  DEFAULT_VIDEO_DURATION_SECONDS,
+  AUTO_VIDEO_DURATION_SECONDS,
+  MAX_VIDEO_REFERENCE_IMAGES,
+  MAX_VIDEO_DURATION_SECONDS,
+  MIN_VIDEO_DURATION_SECONDS,
+  SEEDANCE_VIDEO_MODELS,
+  VIDEO_ASPECT_RATIOS,
+} from './videoProvider.js';
+import {
+  GROK_MAX_VIDEO_REFERENCE_IMAGES,
+  GROK_MAX_VIDEO_DURATION_SECONDS,
+  GROK_MIN_VIDEO_DURATION_SECONDS,
+  GROK_VIDEO_ASPECT_RATIOS,
+  GROK_VIDEO_MODEL,
+} from './grokVideoProvider.js';
 import { MAX_VIDEO_PROMPT_LENGTH } from './videoJobs.js';
 
 export const GUEST_OPERATION_WINDOW_MS = 60_000;
@@ -187,7 +202,8 @@ export function registerAiRoutes(app, deps) {
     cancelAiTask,
     chatTaskScheduler,
     resolveImageReferences,
-    pointsService,
+    saveUploadedFile,
+    PUBLIC_BASE_URL,
     mediaRequestService,
     videoJobStore,
     removeAiSession,
@@ -221,6 +237,7 @@ export function registerAiRoutes(app, deps) {
   };
   const videoImageDataUrlPattern = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+={0,2})$/i;
   const videoReferenceMaxBytes = 10 * 1024 * 1024;
+  const videoReferenceMaxTotalBytes = 32 * 1024 * 1024;
   const loginRequiredMessage = '请先登录后再使用图片或视频生成功能';
   const pendingTaskConflictMessage = '当前会话已有任务正在处理，请等待完成后再试';
   const guestOperationLimiter = createGuestOperationLimiter();
@@ -228,6 +245,7 @@ export function registerAiRoutes(app, deps) {
     ? chatTaskScheduler
     : { schedule: input => Promise.resolve().then(input.run) };
   const aiTaskRuns = new Map();
+  const publicVideoBaseUrl = normalizePublicVideoBaseUrl(PUBLIC_BASE_URL);
 
   function consumeGuestOperation(req, ownerLookup) {
     if (ownerLookup.ownerType !== 'guest') {
@@ -404,42 +422,16 @@ export function registerAiRoutes(app, deps) {
     return { error: '请先登录或提供访客标识', status: 401 };
   }
 
-  function reserveMediaPoints({ taskId, userId, costUnits, taskType }) {
-    if (typeof pointsService?.reserve !== 'function') {
-      return null;
-    }
-
-    try {
-      pointsService.reserve({ taskId, userId, costUnits, taskType });
-      return null;
-    } catch (error) {
-      if (error?.code === 'INSUFFICIENT_POINTS') {
-        return { status: 402, error: '积分不足，无法提交本次生成任务' };
-      }
-      console.error('Failed to reserve media task points:', error);
-      return { status: 503, error: '积分服务暂时不可用，请稍后重试' };
-    }
+  function hasMediaPermission(req, type) {
+    if (req.authUser?.role === 'admin') return true;
+    const permission = type === 'video' ? 'videoGeneration' : 'imageGeneration';
+    return req.authUser?.mediaPermissions?.[permission] === true;
   }
 
-  function releaseMediaPoints(taskId) {
-    if (typeof pointsService?.settle !== 'function') {
-      return;
-    }
-    try {
-      pointsService.settle(taskId, false);
-    } catch (error) {
-      console.error(`Failed to release points for media task ${taskId}:`, error);
-    }
-  }
-
-  function linkMediaTaskPoints(task) {
-    if (typeof pointsService?.linkMediaTask !== 'function') {
-      return;
-    }
-    pointsService.linkMediaTask(task.id, {
-      sessionId: task.sessionId,
-      messageId: task.messageId,
-    });
+  function mediaPermissionMessage(type) {
+    return type === 'video'
+      ? '该账号尚未获得视频生成功能授权，请联系管理员'
+      : '该账号尚未获得图片生成功能授权，请联系管理员';
   }
 
   function runTrackedAiTask(taskId) {
@@ -505,7 +497,129 @@ export function registerAiRoutes(app, deps) {
     return input.map(item => validateVideoImage(item, '角色参考图'));
   }
 
-  function normalizeVideoInputs(body = {}) {
+  function normalizeVideoOption(value, allowed, fallback, label) {
+    const requested = String(value || '').trim();
+    if (!requested) return fallback;
+    const normalized = allowed.find(option => option.toLowerCase() === requested.toLowerCase());
+    if (!normalized) {
+      throw new Error(`${label} must be one of ${allowed.join(', ')}`);
+    }
+    return normalized;
+  }
+
+  function validateVideoInputTotalBytes(images) {
+    const totalBytes = images.reduce((total, source) => {
+      const match = String(source || '').match(videoImageDataUrlPattern);
+      return total + (match ? Buffer.from(match[2], 'base64').length : 0);
+    }, 0);
+    if (totalBytes > videoReferenceMaxTotalBytes) {
+      throw new Error('视频参考图片总大小不能超过 32 MB');
+    }
+  }
+
+  function fingerprintVideoImage(source) {
+    const match = String(source || '').match(videoImageDataUrlPattern);
+    if (!match) return null;
+    const buffer = Buffer.from(match[2], 'base64');
+    return {
+      mimeType: match[1].toLowerCase(),
+      bytes: buffer.length,
+      sha256: createHash('sha256').update(buffer).digest('hex').slice(0, 12),
+    };
+  }
+  function normalizeVideoDuration(value, minDuration = MIN_VIDEO_DURATION_SECONDS, maxDuration = MAX_VIDEO_DURATION_SECONDS, allowAutomatic = false) {
+    if (value == null || value === '') return DEFAULT_VIDEO_DURATION_SECONDS;
+    const durationSeconds = Number(value);
+    if (allowAutomatic && durationSeconds === AUTO_VIDEO_DURATION_SECONDS) return AUTO_VIDEO_DURATION_SECONDS;
+    if (!Number.isInteger(durationSeconds)
+      || durationSeconds < minDuration
+      || durationSeconds > maxDuration) {
+      throw new Error(`\u89c6\u9891\u65f6\u957f\u4ec5\u652f\u6301 ${MIN_VIDEO_DURATION_SECONDS} \u81f3 ${MAX_VIDEO_DURATION_SECONDS} \u79d2\u7684\u6574\u6570`);
+    }
+    return durationSeconds;
+  }
+  function normalizePublicVideoBaseUrl(value) {
+    const source = String(value || '').trim();
+    if (!source) return '';
+    let parsed;
+    try {
+      parsed = new URL(source);
+    } catch {
+      throw new Error('PUBLIC_BASE_URL must be a valid HTTPS origin');
+    }
+    if (parsed.protocol !== 'https:'
+      || parsed.username
+      || parsed.password
+      || parsed.pathname !== '/'
+      || parsed.search
+      || parsed.hash) {
+      throw new Error('PUBLIC_BASE_URL must be an HTTPS origin without a path');
+    }
+    return parsed.origin;
+  }
+  function getRequestPublicVideoBaseUrl(req) {
+    if (publicVideoBaseUrl) return publicVideoBaseUrl;
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('PUBLIC_BASE_URL is required in production');
+    }
+    const forwardedProtocol = String(req.get('x-forwarded-proto') || '').split(',')[0].trim().toLowerCase();
+    const protocol = ['https', 'http'].includes(forwardedProtocol) ? forwardedProtocol : (req.protocol === 'https' ? 'https' : 'http');
+    const host = String(req.get('host') || '').trim();
+    if (!host || /[\\/?#@\s]/u.test(host)) throw new Error('Video upload host is unavailable');
+    let parsed;
+    try { parsed = new URL(`${protocol}://${host}`); } catch { throw new Error('Video upload host is unavailable'); }
+    if (parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) throw new Error('Video upload host is unavailable');
+    return parsed.origin;
+  }
+  function saveVideoInputAsPublicUrl(source, role, index, baseUrl) {
+    if (!source) return null;
+    if (typeof saveUploadedFile !== 'function') throw new Error('Video upload store is unavailable');
+    const match = source.match(videoImageDataUrlPattern);
+    if (!match) throw new Error('Video input must be a validated image data URL');
+    const mimeType = match[1].toLowerCase();
+    const extension = mimeType === 'image/jpeg' ? 'jpg' : mimeType.slice('image/'.length);
+    const uploaded = saveUploadedFile({
+      fileName: `video-${role}-${index + 1}.${extension}`,
+      fileData: source,
+      mimeType,
+    });
+    const relativeUrl = String(uploaded?.fileUrl || '').trim();
+    if (!relativeUrl.startsWith('/uploads/') || relativeUrl.startsWith('//')) {
+      throw new Error('Video upload store returned an invalid URL');
+    }
+    const publicUrl = new URL(relativeUrl, `${baseUrl}/`);
+    if (publicUrl.origin !== baseUrl
+      || !publicUrl.pathname.startsWith('/uploads/')
+      || publicUrl.search
+      || publicUrl.hash) {
+      throw new Error('Video upload store returned an invalid URL');
+    }
+    return { relativeUrl: publicUrl.pathname, publicUrl: publicUrl.toString() };
+  }
+
+  function prepareVideoInputUrls(req, { image, lastFrame, referenceImages }) {
+    const baseUrl = getRequestPublicVideoBaseUrl(req);
+    const firstFrame = saveVideoInputAsPublicUrl(image, 'first-frame', 0, baseUrl);
+    const tailFrame = saveVideoInputAsPublicUrl(lastFrame, 'last-frame', 0, baseUrl);
+    const references = referenceImages.map((source, index) => (
+      saveVideoInputAsPublicUrl(source, 'reference', index, baseUrl)
+    ));
+    const allInputs = [firstFrame, tailFrame, ...references].filter(Boolean);
+    return {
+      displayImages: allInputs.map(input => input.relativeUrl),
+      image: firstFrame?.publicUrl || '',
+      lastFrame: tailFrame?.publicUrl || '',
+      referenceImages: references.map(input => input.publicUrl),
+    };
+  }
+
+  function normalizeVideoInputs(body = {}, videoModel) {
+    const isGrok = videoModel === GROK_VIDEO_MODEL;
+    const isSeedance15 = SEEDANCE_VIDEO_MODELS.includes(videoModel);
+    const maxReferences = isGrok ? GROK_MAX_VIDEO_REFERENCE_IMAGES : isSeedance15 ? 2 : MAX_VIDEO_REFERENCE_IMAGES;
+    const allowedAspectRatios = isGrok ? GROK_VIDEO_ASPECT_RATIOS : VIDEO_ASPECT_RATIOS;
+    const minDuration = isGrok ? GROK_MIN_VIDEO_DURATION_SECONDS : MIN_VIDEO_DURATION_SECONDS;
+    const maxDuration = isGrok ? GROK_MAX_VIDEO_DURATION_SECONDS : MAX_VIDEO_DURATION_SECONDS;
     const hasLegacyImages = Object.prototype.hasOwnProperty.call(body, 'images');
     const hasExplicitInputs = ['image', 'lastFrame', 'referenceImages']
       .some(key => Object.prototype.hasOwnProperty.call(body, key));
@@ -515,25 +629,50 @@ export function registerAiRoutes(app, deps) {
 
     if (hasLegacyImages) {
       const legacyImages = validateVideoReferenceImages(body.images);
+      if (isSeedance15 && legacyImages.length > 1) {
+        throw new Error('Seedance 1.5 Pro does not support reference images; use a first or last frame');
+      }
+      if (legacyImages.length > maxReferences) {
+        throw new Error(`This video model supports at most ${maxReferences} reference image${maxReferences === 1 ? '' : 's'}`);
+      }
+      validateVideoInputTotalBytes(legacyImages);
       return {
         image: legacyImages.length === 1 ? legacyImages[0] : '',
         lastFrame: '',
         referenceImages: legacyImages.length > 1 ? legacyImages : [],
-        durationSeconds: VEO_FAST_DURATION_SECONDS,
+        durationSeconds: normalizeVideoDuration(body.durationSeconds ?? body.duration, minDuration, maxDuration, isSeedance15),
+        aspectRatio: DEFAULT_VIDEO_ASPECT_RATIO,
       };
     }
 
     const image = validateVideoImage(body.image, '首帧');
     const lastFrame = validateVideoImage(body.lastFrame, '尾帧');
     const referenceImages = validateVideoReferenceImages(body.referenceImages);
+    if (isSeedance15 && referenceImages.length) {
+      throw new Error('Seedance 1.5 Pro does not support reference images; use a first or last frame');
+    }
+    const totalImageCount = Number(Boolean(image))
+      + Number(Boolean(lastFrame))
+      + referenceImages.length;
+    if (totalImageCount > maxReferences) {
+      throw new Error(`This video model supports at most ${maxReferences} input image${maxReferences === 1 ? '' : 's'}`);
+    }
+    if (referenceImages.length && (image || lastFrame)) {
+      throw new Error('\u53c2\u8003\u56fe\u4e0d\u80fd\u4e0e\u9996\u5e27\u6216\u5c3e\u5e27\u540c\u65f6\u4f7f\u7528');
+    }
+    validateVideoInputTotalBytes([image, lastFrame, ...referenceImages]);
     if (lastFrame && !image) {
       throw new Error('添加尾帧前请先添加首帧');
+    }
+    if (isGrok && lastFrame) {
+      throw new Error('Grok video does not support a last frame; upload one image for image-to-video instead');
     }
     return {
       image,
       lastFrame,
       referenceImages,
-      durationSeconds: VEO_FAST_DURATION_SECONDS,
+       durationSeconds: normalizeVideoDuration(body.durationSeconds ?? body.duration, minDuration, maxDuration, isSeedance15),
+      aspectRatio: normalizeVideoOption(body.aspectRatio, allowedAspectRatios, DEFAULT_VIDEO_ASPECT_RATIO, 'Video aspect ratio'),
     };
   }
 
@@ -944,6 +1083,9 @@ export function registerAiRoutes(app, deps) {
     if (!req.authUser?.id) {
       return res.status(401).json({ error: loginRequiredMessage });
     }
+    if (!hasMediaPermission(req, 'image')) {
+      return res.status(403).json({ error: mediaPermissionMessage('image') });
+    }
 
     const ownerLookup = resolveRequestOwner(req, req.body);
 
@@ -1018,18 +1160,6 @@ export function registerAiRoutes(app, deps) {
     }
 
     const taskId = generateEntityId('ai_task');
-    const reservationError = reserveMediaPoints({
-      taskId,
-      userId: ownerLookup.ownerId,
-      costUnits: (imageProvider.id === 'grok' ? MEDIA_COST_UNITS.grok : MEDIA_COST_UNITS.gpt) * imageCount,
-      taskType: 'image',
-      imageUnitCost: imageProvider.id === 'grok' ? MEDIA_COST_UNITS.grok : MEDIA_COST_UNITS.gpt,
-    });
-    if (reservationError) {
-      abortMediaRequestClaim(mediaClaim);
-      return res.status(reservationError.status).json({ error: reservationError.error });
-    }
-
     let taskAccepted = false;
     let stagedSession = null;
     try {
@@ -1044,12 +1174,6 @@ export function registerAiRoutes(app, deps) {
       });
       const { session: persistedSession, assistantMessage } = stagedSession;
 
-      linkMediaTaskPoints({
-        id: taskId,
-        sessionId: persistedSession.id,
-        messageId: assistantMessage.id,
-      });
-
       let requestImages;
       try {
         requestImages = await resolveImageReferences(displayImages);
@@ -1059,7 +1183,6 @@ export function registerAiRoutes(app, deps) {
           taskId,
           stagedSession,
         });
-        releaseMediaPoints(taskId);
         abortMediaRequestClaim(mediaClaim);
         return res.status(400).json({
           error: toPublicValidationMessage(error, '图片引用不可用，请重新上传图片'),
@@ -1080,7 +1203,6 @@ export function registerAiRoutes(app, deps) {
         updatedAt: Date.now(),
         imageProvider: imageProvider.id,
         imageCount,
-        imageUnitCost: imageProvider.id === 'grok' ? MEDIA_COST_UNITS.grok : MEDIA_COST_UNITS.gpt,
         imageStage: 'submitting',
         prompt,
         images: requestImages,
@@ -1104,7 +1226,6 @@ export function registerAiRoutes(app, deps) {
           taskId,
           stagedSession,
         });
-        releaseMediaPoints(taskId);
         abortMediaRequestClaim(mediaClaim);
       }
       console.error('Failed to create image task:', error);
@@ -1115,6 +1236,9 @@ export function registerAiRoutes(app, deps) {
   app.post('/api/ai-task/video', (req, res) => {
     if (!req.authUser?.id) {
       return res.status(401).json({ error: loginRequiredMessage });
+    }
+    if (!hasMediaPermission(req, 'video')) {
+      return res.status(403).json({ error: mediaPermissionMessage('video') });
     }
 
     const ownerLookup = resolveRequestOwner(req, req.body);
@@ -1132,29 +1256,40 @@ export function registerAiRoutes(app, deps) {
 
     const existingSession = findAiSession(ownerLookup.ownerRef, req.body.sessionId);
 
+    const requestedVideoModel = String(req.body.videoModel || '').trim();
+    if (requestedVideoModel && ![...SEEDANCE_VIDEO_MODELS, GROK_VIDEO_MODEL].includes(requestedVideoModel)) {
+      return res.status(400).json({ error: 'Unsupported video model' });
+    }
+    const videoModel = requestedVideoModel || VIDEO_API_MODEL;
     let videoInputs;
     try {
-      videoInputs = normalizeVideoInputs(req.body);
+      videoInputs = normalizeVideoInputs(req.body, videoModel);
     } catch (error) {
       return res.status(400).json({
         error: toPublicValidationMessage(error, '视频图片格式不正确'),
       });
     }
-    const { image, lastFrame, referenceImages, durationSeconds } = videoInputs;
-    const displayImages = [image, lastFrame, ...referenceImages].filter(Boolean);
+    const { image, lastFrame, referenceImages, durationSeconds, aspectRatio } = videoInputs;
+    const videoInputFingerprints = {
+      image: fingerprintVideoImage(image),
+      lastFrame: fingerprintVideoImage(lastFrame),
+      referenceImages: referenceImages.map(fingerprintVideoImage),
+    };
 
     const mediaClaim = claimMediaRequest({
       ownerLookup,
       mediaType: 'video',
       requestId: getCompatibleMediaRequestId(req.body.requestId),
       payloadFingerprint: createMediaPayloadFingerprint({
-        version: 2,
+        version: 3,
         sessionId: String(req.body.sessionId || '').trim(),
         prompt,
         image,
         lastFrame,
         referenceImages,
         durationSeconds,
+        aspectRatio,
+        videoModel,
       }),
     });
     if (mediaClaim.claimError) {
@@ -1169,28 +1304,33 @@ export function registerAiRoutes(app, deps) {
     }
 
     const taskId = generateEntityId('ai_task');
-    const reservationError = reserveMediaPoints({
-      taskId,
-      userId: ownerLookup.ownerId,
-      costUnits: MEDIA_COST_UNITS.video,
-      taskType: 'video',
-    });
-    if (reservationError) {
-      abortMediaRequestClaim(mediaClaim);
-      return res.status(reservationError.status).json({ error: reservationError.error });
-    }
-
     let taskAccepted = false;
+    let preparedVideoInputs;
+    try {
+      preparedVideoInputs = prepareVideoInputUrls(req, {
+        image,
+        lastFrame,
+        referenceImages,
+      });
+    } catch (error) {
+      abortMediaRequestClaim(mediaClaim);
+      const status = error?.code === 'UPLOAD_QUOTA_EXCEEDED'
+        ? 413
+        : (error?.code === 'UPLOAD_VALIDATION_ERROR' ? 400 : 500);
+      return res.status(status).json({
+        error: toPublicValidationMessage(error, '\u89c6\u9891\u56fe\u7247\u4e0a\u4f20\u5931\u8d25'),
+      });
+    }
     let stagedSession = null;
     try {
       stagedSession = persistMediaTaskSession({
         ownerLookup,
         requestedSessionId: req.body.sessionId,
-        model: VIDEO_API_MODEL,
+        model: videoModel,
         taskId,
         type: 'video',
         prompt,
-        images: displayImages,
+        images: preparedVideoInputs.displayImages,
       });
       const {
         session,
@@ -1211,17 +1351,19 @@ export function registerAiRoutes(app, deps) {
         status: 'pending',
         error: '',
         prompt,
-        image,
-        lastFrame,
-        referenceImages,
+        image: preparedVideoInputs.image,
+        lastFrame: preparedVideoInputs.lastFrame,
+        referenceImages: preparedVideoInputs.referenceImages,
         durationSeconds,
+        aspectRatio,
+        videoModel,
+        videoInputFingerprints,
         videoStage: 'submitting',
         createdAt: now,
         updatedAt: now,
         mediaRequestKey: mediaClaim.key || undefined,
       };
 
-      linkMediaTaskPoints(task);
       videoJobStore.createVideoJob(task);
       registerAiTask(task);
       acceptMediaRequestClaim(mediaClaim, task);
@@ -1241,7 +1383,6 @@ export function registerAiRoutes(app, deps) {
           stagedSession,
           removeVideoJob: true,
         });
-        releaseMediaPoints(taskId);
         abortMediaRequestClaim(mediaClaim);
       }
       console.error('Failed to create video task:', error);
@@ -1428,10 +1569,6 @@ export function registerAiRoutes(app, deps) {
     if (task.status !== 'completed') {
       return res.status(503).json({ error: '图片生成任务仍在处理中，请稍后重试' });
     }
-    if (task.pointsFinalized === false) {
-      return res.status(503).json({ error: '积分结算尚未完成，图片暂未交付，请稍后重试' });
-    }
-
     const images = Array.isArray(task.partialImages)
       ? task.partialImages.filter(item => typeof item === 'string' && item.trim())
       : [];
@@ -1505,6 +1642,9 @@ export function registerAiRoutes(app, deps) {
   app.post('/api/image-generation', async (req, res) => {
     if (!req.authUser?.id) {
       return res.status(401).json({ error: loginRequiredMessage });
+    }
+    if (!hasMediaPermission(req, 'image')) {
+      return res.status(403).json({ error: mediaPermissionMessage('image') });
     }
 
     const requestId = getCompatibleMediaRequestId(getLegacyImageRequestId(req));
@@ -1590,18 +1730,6 @@ export function registerAiRoutes(app, deps) {
         }
 
         const taskId = generateEntityId('ai_task');
-        const reservationError = reserveMediaPoints({
-          taskId,
-          userId: ownerLookup.ownerId,
-          costUnits: (imageProvider.id === 'grok' ? MEDIA_COST_UNITS.grok : MEDIA_COST_UNITS.gpt) * imageCount,
-          taskType: 'image',
-          imageUnitCost: imageProvider.id === 'grok' ? MEDIA_COST_UNITS.grok : MEDIA_COST_UNITS.gpt,
-        });
-        if (reservationError) {
-          abortMediaRequestClaim(mediaClaim);
-          return reservationError;
-        }
-
         let taskAccepted = false;
         let stagedSession = null;
         try {
@@ -1616,12 +1744,6 @@ export function registerAiRoutes(app, deps) {
           });
           const { session: persistedSession, assistantMessage } = stagedSession;
 
-          linkMediaTaskPoints({
-            id: taskId,
-            sessionId: persistedSession.id,
-            messageId: assistantMessage.id,
-          });
-
           let requestImages;
           try {
             requestImages = await resolveImageReferences(displayImages);
@@ -1631,7 +1753,6 @@ export function registerAiRoutes(app, deps) {
               taskId,
               stagedSession,
             });
-            releaseMediaPoints(taskId);
             abortMediaRequestClaim(mediaClaim);
             return {
               status: 400,
@@ -1653,7 +1774,6 @@ export function registerAiRoutes(app, deps) {
             updatedAt: Date.now(),
             imageProvider: imageProvider.id,
             imageCount,
-            imageUnitCost: imageProvider.id === 'grok' ? MEDIA_COST_UNITS.grok : MEDIA_COST_UNITS.gpt,
             imageStage: 'submitting',
             prompt,
             images: requestImages,
@@ -1671,7 +1791,6 @@ export function registerAiRoutes(app, deps) {
               taskId,
               stagedSession,
             });
-            releaseMediaPoints(taskId);
             abortMediaRequestClaim(mediaClaim);
           }
           console.error('Failed to create legacy image task:', error);

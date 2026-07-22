@@ -11,7 +11,7 @@
 │  ├─ App.tsx                            # 认证、owner、会话、侧栏协调
 │  ├─ components/
 │  │  ├─ Auth/
-│  │  │  ├─ AccountDialog.tsx            # 登录/注册/余额/兑换/管理员工具
+│  │  │  ├─ AccountDialog.tsx            # 登录/注册/媒体授权/管理员工具
 │  │  │  └─ AccountDialog.test.tsx
 │  │  ├─ AiChat/
 │  │  │  ├─ AiChat.tsx                   # AI 聊天页面编排
@@ -19,7 +19,7 @@
 │  │  │  ├─ AiChatComposer.tsx           # 文本、附件与媒体输入
 │  │  │  ├─ AiChatComposerAttachments.tsx
 │  │  │  ├─ useAiChatActions.ts          # 提交/取消 AI 任务
-│  │  │  ├─ useAiChatSync.ts             # 任务轮询、终态与余额刷新
+│  │  │  ├─ useAiChatSync.ts             # 任务轮询与终态同步
 │  │  │  ├─ imageGenerationIntent.ts     # 上一张图片跟随/扩图意图
 │  │  │  ├─ videoGeneration.ts
 │  │  │  └─ AudioMessage.tsx
@@ -28,7 +28,7 @@
 │  ├─ services/
 │  │  ├─ http.ts                         # fetch、超时与安全重试边界
 │  │  ├─ aiTasksApi.ts                   # AI 会话/任务 API
-│  │  ├─ authApi.ts                      # 认证/积分 API 与 401 通知
+│  │  ├─ authApi.ts                      # 认证、媒体授权 API 与 401 通知
 │  │  ├─ aiUploadsApi.ts                 # 单次提交的聊天附件上传 API
 │  │  └─ api.ts                          # 兼容导出入口
 │  ├─ store/
@@ -41,12 +41,11 @@
 ├─ server.js                             # Express 装配与启动入口
 ├─ server/
 │  ├─ authService.js                     # scrypt 账号和 HttpOnly 会话
-│  ├─ authRoutes.js                      # 认证、兑换、管理员接口
-│  ├─ pointsService.js                   # 积分、冻结、结算与审计流水
-│  ├─ mediaRequestService.js             # 付费媒体请求持久幂等与恢复
+│  ├─ authRoutes.js                      # 认证与管理员授权接口
+│  ├─ mediaRequestService.js             # 媒体请求持久幂等与恢复
 │  ├─ publicAiErrors.js                  # 上游错误中文公开映射
 │  ├─ aiRoutes.js                        # AI HTTP 路由与所有权校验
-│  ├─ aiTasks.js                         # 任务执行、取消、恢复和结算
+│  ├─ aiTasks.js                         # 任务执行、取消和恢复
 │  ├─ aiSessions.js                      # owner 范围内的会话历史
 │  ├─ aiProviders.js                     # 聊天/语音/图片 provider 编排
 │  ├─ mediaTaskScheduler.js              # 图片/视频并发与有界队列
@@ -101,12 +100,10 @@
 图片/视频
   -> Cookie 身份校验（游客返回 401）
   -> userId + mediaType + requestId 原子 claim / replay / 409 conflict
-  -> pointsService 冻结积分
+  -> 服务端校验图片/视频授权
   -> mediaTaskScheduler 排队/并发控制
   -> provider 生成并持久化结果
-  -> 成功扣费；失败/取消/拒绝释放
   -> mediaRequestService 持久化终态并保留至少 24 小时
-  -> 页面刷新余额
 ```
 
 任何请求体中的 `userId` 都不能覆盖服务端 Cookie 身份。普通游客聊天保留原行为；图片和视频必须登录。
@@ -116,17 +113,14 @@
 活动数据位于 `storage/data.json`，主要命名空间如下：
 
 ```text
-authUsers             # 账号、密码哈希、角色和积分余额
+authUsers             # 账号、密码哈希、角色和媒体权限
 authSessions          # 哈希后的登录 token；每账号最多 10 个
 aiSessions            # 账号或访客的会话/消息
 videoJobs             # 可恢复的视频任务证据
 mediaRequests         # 图片/视频 requestId、payload 指纹、任务链接与终态
-redeemCodes           # 哈希后的兑换码
-pointReservations     # 媒体任务积分冻结与终态
-pointTransactions     # 有界积分审计流水
 ```
 
-旧 `users`、`accounts`、`friendChats`、`announcement`、`videoCalls` 会在受控迁移中删除。生产升级必须先备份数据，迁移后确认主文件、备份和遗留根数据均不再包含这些键。
+旧 `users`、`accounts`、`friendChats`、`announcement`、`videoCalls`、`redeemCodes`、`pointReservations` 和 `pointTransactions` 会在受控迁移中删除。生产升级必须先备份数据，迁移后确认主文件、备份和遗留根数据均不再包含这些键。
 
 浏览器缓存最多保存 20 个会话、每个会话 50 条稳定消息；当前会话优先保留。服务器每个 owner 最多 100 个会话、每会话 200 条消息，单条内容最多 100,000 个 UTF-16 code units。流式中间态和 `data:` Base64 媒体不会进入 localStorage 或服务端历史，账号历史仍以服务器为权威来源。
 

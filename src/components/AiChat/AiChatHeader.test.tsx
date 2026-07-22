@@ -20,23 +20,22 @@ describe('AiChatHeader', () => {
     expect(screen.getByRole('button', { name: '登录或注册' })).toBeTruthy();
   });
 
-  it('shows available points without moving the centered product title', () => {
+  it('shows account identity without moving the centered product title', () => {
     const { container } = render(<AiChatHeader
       user={{
         id: 'user-1',
         phone: '13800138000',
         realName: '测试用户',
         role: 'user',
-        points: 2,
-        availablePoints: 1.8,
+        mediaPermissions: { imageGeneration: false, videoGeneration: false },
       }}
       onAccountClick={vi.fn()}
     />);
 
-    expect(screen.getByRole('button', { name: '账户，当前可用 1.8 积分' })).toBeTruthy();
-    expect(screen.getByText('1.8 积分')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '账户，测试用户' })).toBeTruthy();
+    expect(screen.getByText('普通账号')).toBeTruthy();
     expect(screen.getByText('测试用户')).toBeTruthy();
-    expect(screen.getByText('测')).toBeTruthy();
+    expect(container.querySelector('img[src*="user-avatar"]')).toBeTruthy();
     expect(container.querySelector('header')?.className).toContain('justify-center');
   });
 

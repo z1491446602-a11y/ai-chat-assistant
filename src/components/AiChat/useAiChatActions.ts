@@ -38,7 +38,6 @@ interface UseAiChatActionsParams {
   setPendingAiFiles: Dispatch<SetStateAction<MessageFile[]>>;
   setPendingAiVideoInputs: Dispatch<SetStateAction<VideoGenerationInputs>>;
   setShowMoreActions: Dispatch<SetStateAction<boolean>>;
-  setShowImageProviderMenu: Dispatch<SetStateAction<boolean>>;
   setIsImageGenerationMode: Dispatch<SetStateAction<boolean>>;
   setIsVideoGenerationMode: Dispatch<SetStateAction<boolean>>;
 }
@@ -68,7 +67,6 @@ export function useAiChatActions({
   setPendingAiFiles,
   setPendingAiVideoInputs,
   setShowMoreActions,
-  setShowImageProviderMenu,
   setIsImageGenerationMode,
   setIsVideoGenerationMode,
 }: UseAiChatActionsParams) {
@@ -78,7 +76,6 @@ export function useAiChatActions({
     setPendingAiFiles([]);
     setPendingAiVideoInputs(createEmptyVideoGenerationInputs());
     setShowMoreActions(false);
-    setShowImageProviderMenu(false);
     setIsImageGenerationMode(false);
     setIsVideoGenerationMode(false);
   };
@@ -176,7 +173,7 @@ export function useAiChatActions({
   };
 
   const submitAiVideoGeneration = async (prompt: string, inputs: VideoGenerationInputs) => {
-    const sessionId = await resolveSessionId('veo_3_1_fast');
+    const sessionId = await resolveSessionId(inputs.videoModel || 'seedance_1_5_pro_720p');
     const requestId = createClientRequestId();
 
     setStreaming(true, null);

@@ -139,11 +139,16 @@ async function passwordMatches(password, user) {
 
 function publicUser(user) {
   if (!user) return null;
+  const isAdmin = user.role === 'admin';
   return {
     id: user.id,
     phone: user.phone,
     realName: user.realName,
-    role: user.role === 'admin' ? 'admin' : 'user',
+    role: isAdmin ? 'admin' : 'user',
+    mediaPermissions: {
+      imageGeneration: isAdmin || user.mediaPermissions?.imageGeneration === true,
+      videoGeneration: isAdmin || user.mediaPermissions?.videoGeneration === true,
+    },
     createdAt: user.createdAt,
   };
 }
@@ -498,6 +503,35 @@ export function createAuthService({
     return publicUser(user);
   }
 
+  function listUsers() {
+    return Object.values(data.authUsers)
+      .map(publicUser)
+      .sort((left, right) => Number(left.createdAt) - Number(right.createdAt));
+  }
+
+  function updateMediaPermissions(userId, permissions = {}) {
+    const normalizedUserId = String(userId || '').trim();
+    const user = data.authUsers[normalizedUserId];
+    if (!user) {
+      throw new AuthServiceError('ACCOUNT_NOT_FOUND', 'Account does not exist');
+    }
+    if (user.role === 'admin') return publicUser(user);
+
+    const previousEntries = Object.entries(user);
+    user.mediaPermissions = {
+      imageGeneration: permissions.imageGeneration === true,
+      videoGeneration: permissions.videoGeneration === true,
+    };
+    user.updatedAt = Number(getNow());
+    try {
+      saveData(data);
+    } catch (error) {
+      restoreRecordsInPlace(user, previousEntries);
+      throw error;
+    }
+    return publicUser(user);
+  }
+
   return {
     register,
     login,
@@ -506,5 +540,7 @@ export function createAuthService({
     prune,
     ensureAdmin,
     resetPasswordByAdmin,
+    listUsers,
+    updateMediaPermissions,
   };
 }

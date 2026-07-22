@@ -1,11 +1,14 @@
 [Unit]
 Description=Hello Kitty Chat App
 After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
 WorkingDirectory=/www/wwwroot/chat-app
 Environment=PORT=3000
+Environment=HOST=127.0.0.1
 Environment=STORAGE_DIR=/www/wwwroot/chat-app/storage
 Environment=DATA_DIR=/www/wwwroot/chat-app/storage
 Environment=DATA_FILE=/www/wwwroot/chat-app/storage/data.json
@@ -13,11 +16,13 @@ Environment=UPLOAD_DIR=/www/wwwroot/chat-app/storage/uploads
 EnvironmentFile=-/www/wwwroot/chat-app/.env
 ExecStartPre=/usr/bin/test -s /www/wwwroot/chat-app/.env
 ExecStart=/usr/bin/node /www/wwwroot/chat-app/server.js
-Restart=always
+Restart=on-failure
 RestartSec=3
 User=chatapp
 Group=chatapp
 LimitNOFILE=65535
+NoNewPrivileges=true
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target

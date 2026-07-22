@@ -34,6 +34,7 @@ export interface ServerAiTask {
   videoWidth?: number;
   videoHeight?: number;
   videoStage?: 'submitting' | 'queued' | 'processing' | 'downloading' | 'validating';
+  videoModel?: 'seedance_1_5_pro_720p' | 'seedance_1_5_pro_480p' | 'grok-imagine-video-1.5';
   createdAt: number;
   updatedAt: number;
 }
@@ -316,9 +317,12 @@ export async function createServerAiVideoTask(
       ...normalizedOwner.body,
       sessionId,
       prompt,
+      ...(inputs.videoModel ? { videoModel: inputs.videoModel } : {}),
       image: inputs.image,
       lastFrame: inputs.lastFrame,
       referenceImages: inputs.referenceImages,
+      ...(Number.isInteger(inputs.durationSeconds) ? { durationSeconds: inputs.durationSeconds } : {}),
+      ...(inputs.aspectRatio ? { aspectRatio: inputs.aspectRatio } : {}),
       requestId: normalizedRequestId,
     }),
   }, '视频请求失败，请稍后重试');

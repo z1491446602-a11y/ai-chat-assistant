@@ -1,4 +1,5 @@
 import { ChevronDown, LoaderCircle, LogIn } from 'lucide-react';
+import userAvatarUrl from '@/assets/user-avatar.jpg';
 import type { AuthStatus, AuthUser } from '@/services/authApi';
 
 interface AiChatHeaderProps {
@@ -6,14 +7,6 @@ interface AiChatHeaderProps {
   authStatus?: AuthStatus;
   sidebarOpen?: boolean;
   onAccountClick: () => void;
-}
-
-function formatPoints(points: number) {
-  return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 }).format(points);
-}
-
-function accountInitial(user: AuthUser) {
-  return user.realName.trim().slice(0, 1) || '我';
 }
 
 export function AiChatHeader({
@@ -27,7 +20,7 @@ export function AiChatHeader({
     : authStatus === 'error'
       ? '登录状态异常，打开账户'
       : user
-        ? `账户，当前可用 ${formatPoints(user.availablePoints)} 积分`
+        ? `账户，${user.realName}`
         : '登录或注册';
 
   return (
@@ -54,14 +47,10 @@ export function AiChatHeader({
           <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" />
         ) : user ? (
           <>
-            <span aria-hidden="true" className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-sky-600 text-xs font-bold text-white">
-              {accountInitial(user)}
-            </span>
+            <img alt="" aria-hidden="true" className="h-7 w-7 shrink-0 rounded-full object-cover" src={userAvatarUrl} />
             <span className="min-w-0 text-left leading-tight">
               <span className="hidden truncate text-xs font-semibold text-slate-900 sm:block">{user.realName}</span>
-              <span className="block whitespace-nowrap text-[11px] tabular-nums text-slate-600">
-                {formatPoints(user.availablePoints)} 积分
-              </span>
+              <span className="block whitespace-nowrap text-[11px] text-slate-600">{user.role === 'admin' ? '管理员' : '普通账号'}</span>
             </span>
             <ChevronDown aria-hidden="true" className="hidden h-3.5 w-3.5 shrink-0 text-slate-400 sm:block" />
           </>

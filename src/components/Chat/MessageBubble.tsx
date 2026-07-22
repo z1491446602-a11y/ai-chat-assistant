@@ -1,6 +1,7 @@
 import { lazy, memo, Suspense, useEffect, useState } from 'react';
-import { User } from 'lucide-react';
 import type { Message } from '@/types';
+import catAvatarUrl from '@/assets/cat-avatar.jpg';
+import userAvatarUrl from '@/assets/user-avatar.jpg';
 import { ContentErrorBoundary } from '@/components/Shared/ContentErrorBoundary';
 import { FileAttachmentCard } from '@/components/Shared/FileAttachmentCard';
 import { AudioMessage } from '@/components/AiChat/AudioMessage';
@@ -129,8 +130,15 @@ const MessageBubbleComponent = ({
             </div>
           </div>
           <div className="flex-shrink-0">
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-sky-500 to-blue-600 text-white shadow-[0_10px_24px_rgba(37,99,235,0.18)]" aria-label="你">
-              <User className="h-5 w-5" />
+            <div className="h-10 w-10 overflow-hidden rounded-full shadow-[0_10px_24px_rgba(37,99,235,0.18)]" aria-label="你">
+              <img
+                src={userAvatarUrl}
+                alt=""
+                aria-hidden="true"
+                width="40"
+                height="40"
+                className="h-full w-full object-cover"
+              />
             </div>
           </div>
         </>
@@ -139,9 +147,11 @@ const MessageBubbleComponent = ({
           <div className="flex-shrink-0 pt-1">
             <div className="h-10 w-10 overflow-hidden rounded-full border border-sky-100 bg-white">
               <img
-                src="/avatar.jpg"
-                alt="AI日常聊天助手"
-                className="h-full w-full object-cover"
+                src={catAvatarUrl}
+                alt="AI猫咪助手"
+                width="40"
+                height="40"
+                className="h-full w-full scale-[1.65] object-cover object-center"
                 loading="lazy"
               />
             </div>

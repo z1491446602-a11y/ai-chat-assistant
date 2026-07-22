@@ -3,6 +3,7 @@
   MediaTaskQueueFullError,
 } from './mediaTaskScheduler.js';
 import { toPublicAiErrorMessage } from './publicAiErrors.js';
+import { GROK_VIDEO_MODEL } from './grokVideoProvider.js';
 
 export const DEFAULT_SETTLEMENT_RETRY_DELAYS_MS = Object.freeze([250, 1_000, 4_000]);
 const MAX_SETTLEMENT_RETRY_DELAYS = 5;
@@ -101,12 +102,9 @@ export function createChatTaskScheduler(options = {}) {
 export function reconcileMediaRequestOrphans({
   mediaRequestService,
   activeTaskIds = [],
-  pointReservations = {},
-  getAiSessions,
   findAiSession,
   patchAiMessage,
   clearAiSessionTask,
-  settleMediaTask,
   videoJobStore,
 } = {}) {
   const result = {
@@ -123,39 +121,9 @@ export function reconcileMediaRequestOrphans({
   }
 
   const plan = mediaRequestService.getRecoveryPlan(activeTaskIds);
-  const activeIds = new Set((activeTaskIds || []).map(taskId => String(taskId || '').trim()));
-  const linkedTaskIds = new Set([
-    ...(plan.activeAccepted || []),
-    ...(plan.orphanAccepted || []),
-    ...(plan.terminalLinked || []),
-  ].map(record => String(record?.taskId || '').trim()).filter(Boolean));
-  const processedClaimedTaskIds = new Set();
   result.activeCount = plan.activeAccepted.length;
   for (const record of plan.claimed || []) {
     try {
-      const ownerRef = { userId: record.userId };
-      const interruptedReservations = Object.values(pointReservations || {}).filter((reservation) => {
-        const taskId = String(reservation?.taskId || '').trim();
-        return reservation?.status === 'reserved'
-          && reservation?.userId === record.userId
-          && reservation?.taskType === record.mediaType
-          && taskId
-          && !activeIds.has(taskId)
-          && !linkedTaskIds.has(taskId)
-          && !processedClaimedTaskIds.has(taskId);
-      });
-      for (const reservation of interruptedReservations) {
-        const taskId = String(reservation.taskId).trim();
-        const sessions = typeof getAiSessions === 'function' ? getAiSessions(ownerRef) : [];
-        for (const session of Array.isArray(sessions) ? sessions : []) {
-          if (String(session?.pendingTaskId || '') !== taskId) continue;
-          if (clearAiSessionTask(ownerRef, session.id, taskId)) {
-            result.terminalPendingClearedCount += 1;
-          }
-        }
-        settleMediaTask(taskId, false);
-        processedClaimedTaskIds.add(taskId);
-      }
       mediaRequestService.abort(record.key);
       result.abortedCount += 1;
     } catch (error) {
@@ -186,7 +154,6 @@ export function reconcileMediaRequestOrphans({
         : null;
 
       if (!session || !message) {
-        settleMediaTask(record.taskId, false);
         try {
           clearAiSessionTask(ownerRef, record.sessionId, record.taskId);
         } catch (error) {
@@ -232,7 +199,6 @@ export function reconcileMediaRequestOrphans({
         terminalStatus = 'failed';
       }
 
-      settleMediaTask(record.taskId, terminalStatus === 'completed');
       try {
         clearAiSessionTask(ownerRef, record.sessionId, record.taskId);
       } catch (error) {
@@ -266,6 +232,8 @@ export function createAiTaskStore({
   performStreamingChatCompletion,
   performImageGeneration,
   videoProvider,
+  grokVideoProvider,
+  seedanceAssetProvider,
   videoFileStore,
   videoJobStore,
   isKittyVoiceModel,
@@ -276,7 +244,6 @@ export function createAiTaskStore({
   VOICE_REPLY_TOP_P,
   mediaTaskScheduler,
   chatTaskScheduler,
-  settleMediaTask = () => {},
   terminalMediaRequest = () => {},
   getMediaRequestKeyForTask = () => '',
   settlementRetryDelaysMs = DEFAULT_SETTLEMENT_RETRY_DELAYS_MS,
@@ -387,7 +354,6 @@ export function createAiTaskStore({
   function finalizeMediaRequest(task) {
     if (
       !task?.mediaRequestKey
-      || !task.pointsFinalized
       || task.mediaRequestFinalized
       || task.mediaRequestTerminalTimer
       || task.mediaRequestTerminalExhausted
@@ -428,69 +394,6 @@ export function createAiTaskStore({
     }
   }
 
-  function settleMediaReservation(task, success, chargedUnits) {
-    if (
-      !task
-      || !['image', 'video'].includes(task.type)
-      || task.pointsFinalized
-      || task.pointsSettlementTimer
-      || task.pointsSettlementExhausted
-    ) {
-      return;
-    }
-
-    if (task.pointsSettlementSuccess === undefined) {
-      task.pointsSettlementSuccess = Boolean(success);
-    }
-    if (chargedUnits !== undefined && task.pointsSettlementChargedUnits === undefined) {
-      task.pointsSettlementChargedUnits = chargedUnits;
-    }
-    task.pointsFinalized = false;
-    task.pointsSettlementAttempts = (Number(task.pointsSettlementAttempts) || 0) + 1;
-    try {
-      if (task.pointsSettlementChargedUnits === undefined) {
-        settleMediaTask(task.id, task.pointsSettlementSuccess);
-      } else {
-        settleMediaTask(
-          task.id,
-          task.pointsSettlementSuccess,
-          task.pointsSettlementChargedUnits,
-        );
-      }
-      task.pointsFinalized = true;
-      delete task.pointsSettlementExhausted;
-    } catch (error) {
-      const retryDelay = settlementRetryDelays[task.pointsSettlementAttempts - 1];
-      if (retryDelay === undefined) {
-        task.pointsSettlementExhausted = true;
-        console.error(
-          `Media task ${task.id} points settlement failed after ${task.pointsSettlementAttempts} attempts; startup reconciliation remains available:`,
-          error,
-        );
-        return;
-      }
-
-      console.error(
-        `Failed to settle points for media task ${task.id}; retrying in ${retryDelay}ms:`,
-        error,
-      );
-      const timer = setTimeout(() => {
-        if (task.pointsSettlementTimer === timer) {
-          delete task.pointsSettlementTimer;
-        }
-        settleMediaReservation(
-          task,
-          task.pointsSettlementSuccess,
-          task.pointsSettlementChargedUnits,
-        );
-      }, retryDelay);
-      task.pointsSettlementTimer = timer;
-      timer.unref?.();
-      return;
-    }
-    finalizeMediaRequest(task);
-  }
-
   function scheduleTaskRemoval(task) {
     const timer = setTimeout(() => {
       const currentTask = getAiTask(task.id);
@@ -501,10 +404,8 @@ export function createAiTaskStore({
     timer.unref?.();
   }
 
-  function finalizeTaskResources(task, settlementSuccess, settlementChargedUnits) {
-    runCleanupStep(task, 'settle points', () => (
-      settleMediaReservation(task, settlementSuccess, settlementChargedUnits)
-    ));
+  function finalizeTaskResources(task) {
+    runCleanupStep(task, 'finalize media request', () => finalizeMediaRequest(task));
     runCleanupStep(task, 'clear session task', () => (
       clearAiSessionTask(getTaskOwnerRef(task), task.sessionId, task.id)
     ));
@@ -607,14 +508,17 @@ export function createAiTaskStore({
 
   function getVideoFailureText(task, error) {
     const message = String(error?.message || '');
+    if (/GlobalAI did not return a task id|Upstream request failed/i.test(message)) {
+      return 'Seedance 上游服务暂不可用，任务尚未创建，请稍后重试。';
+    }
     if (/余额不足|insufficient\s+(balance|credit)|quota\s+exceeded/i.test(message)) {
-      return '视频服务额度暂不可用，本次未扣积分，请联系管理员。';
+      return '视频服务额度暂不可用，请联系管理员。';
     }
     if (/download\s+error|result\s+download|结果下载/i.test(message)) {
-      return '上游视频结果获取失败，本次未扣积分，请稍后重试。';
+      return '上游视频结果获取失败，请稍后重试。';
     }
     if (/timed out|超时/i.test(message)) {
-      return '视频生成等待超时，本次未扣积分，请稍后重试。';
+      return '视频生成等待超时，请稍后重试。';
     }
     if (task.videoStage === 'submitting') {
       return '视频任务提交失败，请稍后重试。';
@@ -664,6 +568,7 @@ export function createAiTaskStore({
       imageProvider: task.imageProvider,
       imageCount: task.imageCount,
       videoStage: task.videoStage,
+      videoModel: task.videoModel,
       videoUrl: task.videoUrl,
       videoMimeType: task.videoMimeType,
       videoFileName: task.videoFileName,
@@ -800,10 +705,6 @@ export function createAiTaskStore({
           ? result.completedCount
           : 1;
         const requestedCount = Number.isSafeInteger(task.imageCount) ? task.imageCount : 1;
-        const imageUnitCost = Number(task.imageUnitCost);
-        if (Number.isSafeInteger(imageUnitCost) && imageUnitCost > 0) {
-          task.pointsSettlementChargedUnits = imageUnitCost * completedCount;
-        }
         task.partialContent = requestedCount > 1
           ? `已生成 ${completedCount}/${requestedCount} 张图片${result.failedCount ? `，${result.failedCount} 张失败。` : '。'}`
           : getImageTaskProgressText(task, 'completed');
@@ -846,17 +747,34 @@ export function createAiTaskStore({
           if (!task.upstreamTaskId) {
             console.log('[video-task] submitting', JSON.stringify({
               taskId: task.id,
+              model: task.videoModel || '',
+              mode: Array.isArray(task.referenceImages) && task.referenceImages.length
+                ? 'subject-reference'
+                : (task.image ? 'frames' : 'text'),
               promptLen: (task.prompt || '').length,
               hasFirstFrame: Boolean(task.image),
               hasLastFrame: Boolean(task.lastFrame),
               referenceImageCount: Array.isArray(task.referenceImages) ? task.referenceImages.length : 0,
+              inputFingerprints: task.videoInputFingerprints,
             }));
-            const submitted = await videoProvider.submit({
+            const activeVideoProvider = task.videoModel === GROK_VIDEO_MODEL
+              ? grokVideoProvider
+              : videoProvider;
+            if (!activeVideoProvider?.submit || !activeVideoProvider?.poll) {
+              throw new Error(task.videoModel === GROK_VIDEO_MODEL
+                ? 'Grok video provider is not configured'
+                : 'Video provider is not configured');
+            }
+            const submitted = await activeVideoProvider.submit({
+              model: task.videoModel,
               prompt: task.prompt,
+              // The documented create endpoint accepts public URLs directly for all image inputs.
               image: task.image,
               lastFrame: task.lastFrame,
               referenceImages: task.referenceImages,
               durationSeconds: task.durationSeconds,
+              aspectRatio: task.aspectRatio,
+              signal: controller.signal,
             });
             console.log('[video-task] submit result', JSON.stringify({ taskId: task.id, upstreamTaskId: submitted.id, status: submitted.status, hasVideoUrl: Boolean(submitted.videoUrl) }));
             throwIfCancelled(task, controller);
@@ -872,7 +790,11 @@ export function createAiTaskStore({
           if (!upstreamVideoUrl) {
             const pollStartMs = Date.now();
             console.log('[video-task] start polling', JSON.stringify({ taskId: task.id, upstreamTaskId: task.upstreamTaskId }));
-            upstreamVideoUrl = await videoProvider.poll(task.upstreamTaskId, (stage) => {
+            const activeVideoProvider = task.videoModel === GROK_VIDEO_MODEL
+              ? grokVideoProvider
+              : videoProvider;
+            if (!activeVideoProvider?.poll) throw new Error('Video provider is not configured');
+            upstreamVideoUrl = await activeVideoProvider.poll(task.upstreamTaskId, (stage) => {
               updateVideoStage(task, stage);
             });
             console.log('[video-task] poll completed', JSON.stringify({ taskId: task.id, pollDurationMs: Date.now() - pollStartMs, urlLen: String(upstreamVideoUrl || '').length }));
@@ -880,12 +802,27 @@ export function createAiTaskStore({
           }
 
           console.log('[video-task] downloading video', task.id);
-          const video = await videoFileStore.downloadValidateAndSave({
-            jobId: task.id,
-            videoUrl: upstreamVideoUrl,
-            onStage: (stage) => updateVideoStage(task, stage),
-          });
-          console.log('[video-task] download done', JSON.stringify({ taskId: task.id, fileSize: video.fileSize ?? 0 }));
+          let video;
+          try {
+            video = await videoFileStore.downloadValidateAndSave({
+              jobId: task.id,
+              videoUrl: upstreamVideoUrl,
+              onStage: (stage) => updateVideoStage(task, stage),
+            });
+          } catch (error) {
+            const parsedUrl = new URL(upstreamVideoUrl);
+            const canPlayGrokOutputDirectly = task.videoModel === GROK_VIDEO_MODEL
+              && parsedUrl.protocol === 'https:'
+              && parsedUrl.hostname.toLowerCase() === 'vidgen.x.ai'
+              && typeof videoFileStore.createExternalVideoReference === 'function';
+            if (!canPlayGrokOutputDirectly) throw error;
+            console.warn('[video-task] local Grok download failed; using temporary direct playback URL', JSON.stringify({
+              taskId: task.id,
+              errorMsg: error?.message || '',
+            }));
+            video = videoFileStore.createExternalVideoReference(upstreamVideoUrl);
+          }
+          console.log('[video-task] download done', JSON.stringify({ taskId: task.id, fileSize: video.size ?? video.videoFileSize ?? 0 }));
           throwIfCancelled(task, controller);
           completeVideoTask(task, video);
         }
@@ -944,11 +881,7 @@ export function createAiTaskStore({
         clearInterval(taskHeartbeatTimer);
       }
       delete task.abortController;
-      finalizeTaskResources(
-        task,
-        task.status === 'completed',
-        task.pointsSettlementChargedUnits,
-      );
+      finalizeTaskResources(task);
     }
   }
 
@@ -1042,7 +975,41 @@ export function createAiTaskStore({
   }
 
   function resumeVideoJobs() {
-    const { recoverable, unknownSubmission } = videoJobStore.getRecoveryPlan();
+    const {
+      recoverable = [],
+      unknownSubmission = [],
+      staleAssets = [],
+    } = videoJobStore.getRecoveryPlan();
+
+    const cleanupRecoveryAssets = (job) => {
+      const assetIds = Array.isArray(job.videoAssetIds)
+        ? [...new Set(job.videoAssetIds.map(String).filter(Boolean))]
+        : [];
+      if (!assetIds.length) return;
+
+      let cleanup;
+      try {
+        cleanup = seedanceAssetProvider.cleanupAssets(assetIds);
+      } catch (error) {
+        console.error('[video-task] recovered asset cleanup failed', JSON.stringify({
+          taskId: job.id,
+          assetCount: assetIds.length,
+          errorMsg: error?.message || '',
+        }));
+        return;
+      }
+      Promise.resolve(cleanup).then(() => {
+        runCleanupStep(job, 'clear recovered video assets', () => (
+          videoJobStore.patchVideoJob(job.id, { videoAssetIds: [] })
+        ));
+      }).catch((error) => {
+        console.error('[video-task] recovered asset cleanup failed', JSON.stringify({
+          taskId: job.id,
+          assetCount: assetIds.length,
+          errorMsg: error?.message || '',
+        }));
+      });
+    };
 
     const failRecovery = (job, content) => {
       const ownerRef = job.ownerType === 'guest'
@@ -1062,17 +1029,20 @@ export function createAiTaskStore({
       runCleanupStep(job, 'clear recovered session task', () => (
         clearAiSessionTask(ownerRef, job.sessionId, job.id)
       ));
-      runCleanupStep(job, 'settle recovered points', () => (
-        settleMediaReservation({
-          ...job,
-          type: 'video',
-          status: 'failed',
-          mediaRequestKey: getMediaRequestKeyForTask(job.id),
-        }, false)
-      ));
+      const mediaRequestKey = getMediaRequestKeyForTask(job.id);
+      if (mediaRequestKey) {
+        runCleanupStep(job, 'finalize recovered media request', () => (
+          terminalMediaRequest(mediaRequestKey, 'failed')
+        ));
+      }
     };
 
+    for (const job of staleAssets) {
+      cleanupRecoveryAssets(job);
+    }
+
     for (const job of unknownSubmission) {
+      cleanupRecoveryAssets(job);
       failRecovery(job, '提交结果未知，为避免重复扣费未自动重试。');
     }
 

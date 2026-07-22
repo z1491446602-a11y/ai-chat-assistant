@@ -12,6 +12,34 @@ vi.mock('./MarkdownContent', () => ({
 }));
 
 describe('MessageBubble heavy render boundary', () => {
+  it('renders the cat avatar for assistant messages', () => {
+    const message: Message = {
+      id: 'assistant-avatar-message',
+      role: 'assistant',
+      content: 'Hi',
+      timestamp: 1_000,
+      status: 'streaming',
+    };
+
+    render(<MessageBubble message={message} isStreaming />);
+
+    expect(screen.getByRole('img', { name: 'AI猫咪助手' }).getAttribute('src')).toContain('cat-avatar');
+  });
+
+  it('renders the provided Hello Kitty avatar for user messages', () => {
+    const message: Message = {
+      id: 'user-avatar-message',
+      role: 'user',
+      content: 'Hi',
+      timestamp: 1_000,
+      status: 'sent',
+    };
+
+    const { container } = render(<MessageBubble message={message} />);
+
+    expect(container.querySelector('img[src*="user-avatar"]')).toBeTruthy();
+  });
+
   it('renders assistant streaming content as literal React text without Markdown HTML', () => {
     const message: Message = {
       id: 'streaming-message',

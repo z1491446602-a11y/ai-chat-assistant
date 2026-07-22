@@ -68,7 +68,7 @@ const images = await Promise.all(options.images.map(toDataUrl));
 const sessionResult = await requestJson(`${options.baseUrl}/api/ai-sessions`, {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ guestId: options.guestId, model: 'veo_3_1_fast' }),
+  body: JSON.stringify({ guestId: options.guestId, model: 'seedance_1_5_pro_720p' }),
 });
 const createResult = await requestJson(`${options.baseUrl}/api/ai-task/video`, {
   method: 'POST',

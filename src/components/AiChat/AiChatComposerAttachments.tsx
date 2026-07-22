@@ -1,26 +1,17 @@
-import { Check, ChevronDown, FileUp, ImagePlus, Sparkles, Video } from 'lucide-react';
-import type { ImageGenerationProvider } from '@/services/api';
-
-interface ImageProviderOption {
-  value: ImageGenerationProvider;
-  label: string;
-}
+import { FileUp, ImagePlus, Images, Video, X } from 'lucide-react';
 
 interface AiChatComposerAttachmentsProps {
-  selectedImageProviderLabel: string;
   showMoreActions: boolean;
-  showImageProviderMenu: boolean;
-  imageProviderOptions: readonly ImageProviderOption[];
   effectiveImageGenerationMode: boolean;
   isVideoGenerationMode: boolean;
   isGeneratingVideoTask: boolean;
   isUploadingImages: boolean;
   isUploadingFile: boolean;
   disabled: boolean;
-  mediaEnabled: boolean;
+  mediaAuthenticated: boolean;
+  imageGenerationAllowed: boolean;
+  videoGenerationAllowed: boolean;
   onRequireLogin: () => void;
-  onToggleImageProviderMenu: () => void;
-  onSelectImageProvider: (provider: ImageGenerationProvider) => void;
   onToggleImageGenerationMode: () => void;
   onToggleVideoGenerationMode: () => void;
   onOpenMoreActions: () => void;
@@ -29,60 +20,54 @@ interface AiChatComposerAttachmentsProps {
 }
 
 export function AiChatComposerAttachments(props: AiChatComposerAttachmentsProps) {
-  const compactLabel = props.selectedImageProviderLabel.endsWith('Grok') ? 'Grok 生图' : 'GPT 生图';
-  const runMediaAction = (action: () => void) => {
-    if (props.disabled) {
-      return;
-    }
-    if (!props.mediaEnabled) {
+  const runMediaAction = (allowed: boolean, action: () => void) => {
+    if (props.disabled) return;
+    if (!props.mediaAuthenticated) {
       props.onRequireLogin();
       return;
     }
+    if (!allowed) return;
     action();
   };
+  const inactiveClass = 'border border-sky-100 bg-sky-50 text-slate-700 hover:bg-sky-100';
+  const activeClass = 'border border-sky-200 bg-sky-100 text-sky-800 hover:bg-sky-200';
 
   return (
-    <div className="mt-2 flex min-w-0 flex-1 items-center gap-1.5 overflow-visible">
+    <div className="flex min-w-0 items-center gap-1.5 overflow-visible">
       <div className="relative">
         <button type="button" onClick={props.onOpenMoreActions} disabled={props.disabled || props.isUploadingImages || props.isUploadingFile} className="tech-hover-float flex h-8 w-8 items-center justify-center rounded-full border border-sky-100 bg-sky-50 text-slate-700 disabled:opacity-50" aria-label="更多操作">
           <ImagePlus className="h-4 w-4" />
         </button>
         {props.showMoreActions ? (
-          <div className="absolute bottom-12 left-0 z-40 min-w-[148px] space-y-1 rounded-2xl border border-sky-200 bg-white p-2 shadow-[0_14px_32px_rgba(15,23,42,0.16)]">
-            <button type="button" onClick={props.onOpenAiImagePicker} disabled={props.disabled} className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-sky-50 disabled:opacity-50">
+          <div className="absolute bottom-12 left-0 z-40 min-w-[148px] space-y-1 rounded-lg border border-sky-200 bg-white p-2 shadow-[0_14px_32px_rgba(15,23,42,0.16)]">
+            <button type="button" onClick={props.onOpenAiImagePicker} disabled={props.disabled} className="flex min-h-11 w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm text-slate-700 hover:bg-sky-50 disabled:opacity-50">
               <ImagePlus className="h-4 w-4 text-sky-600" /><span>上传图片</span>
             </button>
-            <button type="button" onClick={props.onOpenAiFilePicker} disabled={props.disabled} className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-sky-50 disabled:opacity-50">
+            <button type="button" onClick={props.onOpenAiFilePicker} disabled={props.disabled} className="flex min-h-11 w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm text-slate-700 hover:bg-sky-50 disabled:opacity-50">
               <FileUp className="h-4 w-4 text-cyan-600" /><span>上传文档</span>
             </button>
           </div>
         ) : null}
       </div>
 
-      <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-visible">
-        <div className="relative flex min-w-0 shrink overflow-visible">
-          <div className={`flex h-8 min-w-0 overflow-hidden rounded-full ${props.effectiveImageGenerationMode ? 'bg-gradient-to-r from-sky-500 to-blue-600 text-white' : 'border border-sky-100 bg-sky-50 text-slate-700'}`}>
-            <button type="button" onClick={() => runMediaAction(props.onToggleImageGenerationMode)} disabled={props.disabled} className="flex min-w-0 items-center gap-1 px-2.5 text-xs font-medium disabled:opacity-50" aria-label={props.selectedImageProviderLabel}>
-              <Sparkles className="h-3.5 w-3.5 shrink-0" /><span className="max-[360px]:hidden sm:hidden">{compactLabel}</span><span className="hidden sm:inline">{props.selectedImageProviderLabel}</span>
-            </button>
-            <button type="button" onClick={() => runMediaAction(props.onToggleImageProviderMenu)} disabled={props.disabled} className="flex w-7 items-center justify-center border-l border-sky-100 disabled:opacity-50" aria-label="选择图片生成模型" aria-expanded={props.showImageProviderMenu}>
-              <ChevronDown className={`h-3.5 w-3.5 ${props.showImageProviderMenu ? 'rotate-180' : ''}`} />
-            </button>
-          </div>
-          {props.showImageProviderMenu ? (
-            <div className="absolute bottom-12 left-0 z-40 min-w-[176px] rounded-2xl border border-sky-200 bg-white p-2 shadow-[0_18px_42px_rgba(15,23,42,0.18)]">
-              {props.imageProviderOptions.map((option) => (
-                <button type="button" key={option.value} onClick={() => runMediaAction(() => props.onSelectImageProvider(option.value))} disabled={props.disabled} aria-pressed={props.selectedImageProviderLabel === option.label} className={`flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left text-sm disabled:opacity-50 ${props.selectedImageProviderLabel === option.label ? 'bg-sky-50 font-medium text-sky-800' : 'text-slate-700 hover:bg-sky-50'}`}>
-                  <span>{option.label}</span>{props.selectedImageProviderLabel === option.label ? <Check className="h-4 w-4" /> : null}
-                </button>
-              ))}
-            </div>
-          ) : null}
-        </div>
-        <button type="button" onClick={() => runMediaAction(props.onToggleVideoGenerationMode)} disabled={props.disabled || props.isGeneratingVideoTask} className={`flex h-8 items-center gap-1 rounded-full px-2.5 text-xs font-medium disabled:opacity-50 ${props.isVideoGenerationMode ? 'bg-rose-500 text-white' : 'border border-sky-100 bg-sky-50 text-slate-700'}`} aria-label="生成视频">
-          <Video className="h-3.5 w-3.5" /><span className="max-[360px]:hidden">生成视频</span>
+      {props.isVideoGenerationMode ? (
+        <button type="button" onClick={() => runMediaAction(props.videoGenerationAllowed, props.onToggleVideoGenerationMode)} disabled={props.disabled || props.isGeneratingVideoTask || !props.videoGenerationAllowed} className={`flex h-8 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-medium transition-colors disabled:opacity-50 ${activeClass}`} aria-label="关闭视频生成">
+          <Video className="h-3.5 w-3.5" /><span>视频生成</span><X className="h-3.5 w-3.5" />
         </button>
-      </div>
+      ) : props.effectiveImageGenerationMode ? (
+        <button type="button" onClick={() => runMediaAction(props.imageGenerationAllowed, props.onToggleImageGenerationMode)} disabled={props.disabled || !props.imageGenerationAllowed} className={`flex h-8 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-medium transition-colors disabled:opacity-50 ${activeClass}`} aria-label="关闭图片生成">
+          <Images className="h-3.5 w-3.5" /><span>图片生成</span><X className="h-3.5 w-3.5" />
+        </button>
+      ) : (
+        <>
+          <button type="button" title={props.mediaAuthenticated && !props.imageGenerationAllowed ? '需管理员授权' : undefined} onClick={() => runMediaAction(props.imageGenerationAllowed, props.onToggleImageGenerationMode)} disabled={props.disabled || (props.mediaAuthenticated && !props.imageGenerationAllowed)} className={`flex h-8 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${inactiveClass}`} aria-label="生成图片">
+            <Images className="h-3.5 w-3.5" /><span className="max-[360px]:hidden">生成图片</span>
+          </button>
+          <button type="button" title={props.mediaAuthenticated && !props.videoGenerationAllowed ? '需管理员授权' : undefined} onClick={() => runMediaAction(props.videoGenerationAllowed, props.onToggleVideoGenerationMode)} disabled={props.disabled || props.isGeneratingVideoTask || (props.mediaAuthenticated && !props.videoGenerationAllowed)} className={`flex h-8 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${inactiveClass}`} aria-label="生成视频">
+            <Video className="h-3.5 w-3.5" /><span className="max-[360px]:hidden">生成视频</span>
+          </button>
+        </>
+      )}
     </div>
   );
 }

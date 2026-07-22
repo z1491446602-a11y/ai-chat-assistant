@@ -539,6 +539,122 @@
   }
 }
 
+@keyframes homeReveal {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes homeVisualReveal {
+  from {
+    opacity: 0;
+    transform: translateY(22px) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes homeEntryAura {
+  0%,
+  100% {
+    opacity: 0.2;
+  }
+
+  50% {
+    opacity: 0.52;
+  }
+}
+
+@keyframes homeEntryBorderGlow {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+
+  50% {
+    opacity: 0.92;
+  }
+}
+
+.home-page {
+  font-family: ui-rounded, "SF Pro Rounded", "Microsoft YaHei UI", "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
+  letter-spacing: 0;
+}
+
+.home-atmosphere {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(122deg, rgba(246, 250, 255, 0) 38%, rgba(219, 235, 255, 0.78) 74%, rgba(235, 245, 255, 0.28) 100%),
+    linear-gradient(180deg, #f9fcff 0%, rgba(246, 250, 255, 0.82) 48%, #f2f8ff 100%);
+}
+
+.home-reveal {
+  animation: homeReveal 0.56s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.home-product-visual {
+  animation: homeVisualReveal 0.7s 0.08s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.home-primary-action {
+  isolation: isolate;
+  position: relative;
+  border-color: rgba(104, 166, 246, 0.78);
+  box-shadow:
+    0 24px 70px rgba(45, 91, 162, 0.14),
+    0 0 0 1px rgba(255, 255, 255, 0.88) inset,
+    0 0 12px rgba(96, 165, 250, 0.14);
+}
+
+.home-primary-action::before {
+  position: absolute;
+  z-index: -1;
+  inset: -6px;
+  border-radius: inherit;
+  content: '';
+  pointer-events: none;
+  border: 1px solid rgba(141, 190, 253, 0.42);
+  box-shadow: 0 0 13px 2px rgba(114, 177, 255, 0.24);
+  filter: blur(3px);
+  animation: homeEntryAura 4.6s ease-in-out infinite;
+}
+
+.home-primary-action::after {
+  position: absolute;
+  z-index: 1;
+  inset: -1px;
+  border-radius: inherit;
+  content: '';
+  pointer-events: none;
+  border: 1px solid rgba(146, 194, 255, 0.88);
+  box-shadow: 0 0 8px rgba(92, 158, 248, 0.34);
+  animation: homeEntryBorderGlow 4.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-reveal,
+  .home-product-visual,
+  .home-primary-action::before,
+  .home-primary-action::after {
+    animation: none;
+  }
+
+  .home-primary-action::after {
+    opacity: 0.8;
+  }
+}
+
 @layer utilities {
   .text-gradient {
     @apply bg-clip-text text-transparent;

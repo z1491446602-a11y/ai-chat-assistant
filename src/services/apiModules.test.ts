@@ -362,7 +362,7 @@ describe('AI task API module', () => {
     )).rejects.toThrow('模型服务额度不足');
   });
 
-  it('sends structured Veo inputs without the legacy images field', async () => {
+  it('sends structured Seedance inputs without the legacy images field', async () => {
     queueJsonResponse(taskResult);
 
     await expect(
@@ -371,9 +371,11 @@ describe('AI task API module', () => {
         undefined,
         'animate',
         {
+          videoModel: 'seedance_1_5_pro_480p',
           image: 'first-frame',
           lastFrame: 'last-frame',
           referenceImages: ['front', 'side', 'back'],
+          durationSeconds: 5,
         },
         'request-video-1',
       ),
@@ -385,9 +387,11 @@ describe('AI task API module', () => {
         guestId: 'guest-1',
         sessionId: undefined,
         prompt: 'animate',
+        videoModel: 'seedance_1_5_pro_480p',
         image: 'first-frame',
         lastFrame: 'last-frame',
         referenceImages: ['front', 'side', 'back'],
+        durationSeconds: 5,
         requestId: 'request-video-1',
       }),
     });

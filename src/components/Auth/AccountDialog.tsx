@@ -1,27 +1,23 @@
 import {
-  ChevronDown,
   CircleUserRound,
-  History,
+  Image,
   KeyRound,
   LogIn,
   LogOut,
   ShieldCheck,
-  Sparkles,
-  TicketCheck,
   UserPlus,
+  Video,
   X,
 } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import type { FormEvent, MouseEvent } from 'react';
 import type {
   AdminResetPasswordInput,
+  AdminUser,
   AuthUser,
-  GeneratedRedeemCode,
   LoginInput,
-  PointTransactionRecord,
   RegisterInput,
 } from '@/services/authApi';
-import { AccountUsageHistory } from './AccountUsageHistory';
 
 type ActionResult = void | Promise<void>;
 
@@ -33,9 +29,11 @@ export interface AccountDialogProps {
   onLogin: (input: LoginInput) => ActionResult;
   onRegister: (input: RegisterInput) => ActionResult;
   onLogout: () => ActionResult;
-  onRedeem: (code: string) => ActionResult;
-  onLoadTransactions: () => Promise<PointTransactionRecord[]>;
-  onGenerateCode: (points: number) => GeneratedRedeemCode | Promise<GeneratedRedeemCode>;
+  onLoadUsers: () => Promise<AdminUser[]>;
+  onUpdatePermissions: (
+    userId: string,
+    permissions: AuthUser['mediaPermissions'],
+  ) => Promise<AdminUser>;
   onResetPassword: (input: AdminResetPasswordInput) => ActionResult;
 }
 
@@ -43,6 +41,40 @@ function errorMessage(error: unknown): string {
   return error instanceof Error && error.message.trim()
     ? error.message
     : '操作失败，请稍后重试';
+}
+
+const inputClass = 'min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3.5 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50';
+const primaryButtonClass = 'inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
+
+function PermissionToggle({
+  checked,
+  disabled,
+  icon: Icon,
+  label,
+  onChange,
+}: {
+  checked: boolean;
+  disabled: boolean;
+  icon: typeof Image;
+  label: string;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className="flex min-h-11 items-center justify-between gap-3 rounded-lg px-3 py-2 hover:bg-slate-50">
+      <span className="flex items-center gap-2 text-sm text-slate-700">
+        <Icon aria-hidden="true" className="h-4 w-4 text-slate-500" />
+        {label}
+      </span>
+      <input
+        aria-label={label}
+        checked={checked}
+        className="h-4 w-4 accent-blue-600"
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+        type="checkbox"
+      />
+    </label>
+  );
 }
 
 export function AccountDialog({
@@ -53,114 +85,58 @@ export function AccountDialog({
   onLogin,
   onRegister,
   onLogout,
-  onRedeem,
-  onLoadTransactions,
-  onGenerateCode,
+  onLoadUsers,
+  onUpdatePermissions,
   onResetPassword,
 }: AccountDialogProps) {
   const titleId = useId();
-  const loginPanelId = useId();
-  const registerPanelId = useId();
-  const loginTabId = useId();
-  const registerTabId = useId();
-  const resetPasswordPanelId = useId();
-  const resetPasswordWarningId = useId();
-  const profileTabId = useId();
-  const historyTabId = useId();
-  const profilePanelId = useId();
-  const historyPanelId = useId();
   const firstInputRef = useRef<HTMLInputElement>(null);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [realName, setRealName] = useState('');
-  const [redeemValue, setRedeemValue] = useState('');
-  const [pointsValue, setPointsValue] = useState('10');
-  const [generatedCode, setGeneratedCode] = useState<GeneratedRedeemCode | null>(null);
-  const [isGeneratingCode, setIsGeneratingCode] = useState(false);
-  const [resetPasswordOpen, setResetPasswordOpen] = useState(false);
+  const [actionError, setActionError] = useState('');
+  const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [updatingUserId, setUpdatingUserId] = useState('');
   const [resetPhone, setResetPhone] = useState('');
   const [resetRealName, setResetRealName] = useState('');
   const [resetNewPassword, setResetNewPassword] = useState('');
-  const [isResettingPassword, setIsResettingPassword] = useState(false);
-  const [resetPasswordError, setResetPasswordError] = useState('');
-  const [resetPasswordStatus, setResetPasswordStatus] = useState('');
-  const [actionError, setActionError] = useState('');
-  const [pointsError, setPointsError] = useState('');
-  const [accountSection, setAccountSection] = useState<'profile' | 'history'>('profile');
-  const [transactions, setTransactions] = useState<PointTransactionRecord[] | null>(null);
-  const [transactionsLoading, setTransactionsLoading] = useState(false);
-  const [transactionsError, setTransactionsError] = useState('');
-  const [transactionsReloadKey, setTransactionsReloadKey] = useState(0);
-  const dialogLocked = isGeneratingCode || isResettingPassword;
-  const controlsBusy = busy || dialogLocked;
+  const [resettingPassword, setResettingPassword] = useState(false);
+  const controlsBusy = busy || Boolean(updatingUserId) || resettingPassword;
 
   useEffect(() => {
-    if (open) return;
-
-    setGeneratedCode(null);
-    setActionError('');
-    setPointsError('');
-    setResetPasswordOpen(false);
-    setResetPhone('');
-    setResetRealName('');
-    setResetNewPassword('');
-    setResetPasswordError('');
-    setResetPasswordStatus('');
-    setAccountSection('profile');
-    setTransactions(null);
-    setTransactionsLoading(false);
-    setTransactionsError('');
+    if (!open) {
+      setActionError('');
+      setAdminUsers([]);
+      setResetPhone('');
+      setResetRealName('');
+      setResetNewPassword('');
+      return;
+    }
+    const timer = window.setTimeout(() => firstInputRef.current?.focus(), 0);
+    return () => window.clearTimeout(timer);
   }, [open]);
 
   useEffect(() => {
-    setAccountSection('profile');
-    setTransactions(null);
-    setTransactionsError('');
-  }, [user?.id]);
-
-  useEffect(() => {
-    if (!open || !user || accountSection !== 'history') return;
-
+    if (!open || user?.role !== 'admin') return;
     let cancelled = false;
-    setTransactionsLoading(true);
-    setTransactionsError('');
-    void onLoadTransactions()
-      .then(result => {
-        if (!cancelled) setTransactions(result);
-      })
-      .catch(error => {
-        if (!cancelled) setTransactionsError(errorMessage(error));
-      })
-      .finally(() => {
-        if (!cancelled) setTransactionsLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [accountSection, onLoadTransactions, open, transactionsReloadKey, user]);
+    setUsersLoading(true);
+    void onLoadUsers()
+      .then(users => { if (!cancelled) setAdminUsers(users); })
+      .catch(error => { if (!cancelled) setActionError(errorMessage(error)); })
+      .finally(() => { if (!cancelled) setUsersLoading(false); });
+    return () => { cancelled = true; };
+  }, [onLoadUsers, open, user?.role]);
 
   useEffect(() => {
     if (!open) return;
-
-    const focusTimer = window.setTimeout(() => firstInputRef.current?.focus(), 0);
-
-    return () => window.clearTimeout(focusTimer);
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !dialogLocked) onClose();
+      if (event.key === 'Escape' && !controlsBusy) onClose();
     };
     window.addEventListener('keydown', handleKeyDown);
-
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [dialogLocked, onClose, open]);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [controlsBusy, onClose, open]);
 
   if (!open) return null;
 
@@ -173,489 +149,151 @@ export function AccountDialog({
     }
   };
 
-  const handleBackdropMouseDown = (event: MouseEvent<HTMLDivElement>) => {
-    if (event.target === event.currentTarget && !dialogLocked) onClose();
-  };
-
   const handleAuthSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const normalizedPhone = phone.trim();
-    if (authMode === 'login') {
-      void runAction(() => onLogin({ phone: normalizedPhone, password }));
-      return;
-    }
-
-    void runAction(() => onRegister({
-      phone: normalizedPhone,
-      password,
-      realName: realName.trim(),
-    }));
+    void runAction(() => authMode === 'login'
+      ? onLogin({ phone: normalizedPhone, password })
+      : onRegister({ phone: normalizedPhone, password, realName: realName.trim() }));
   };
 
-  const handleRedeemSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const code = redeemValue.trim();
-    if (!code) return;
-    void runAction(async () => {
-      await onRedeem(code);
-      setRedeemValue('');
-      setTransactions(null);
-    });
-  };
-
-  const handleGenerateSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const points = Number(pointsValue);
-    if (!Number.isFinite(points) || points <= 0) {
-      setPointsError('请输入大于 0 的积分额度');
-      return;
-    }
-
-    setPointsError('');
+  const updatePermissions = async (
+    target: AdminUser,
+    patch: Partial<AuthUser['mediaPermissions']>,
+  ) => {
     setActionError('');
-    setGeneratedCode(null);
-    setIsGeneratingCode(true);
+    setUpdatingUserId(target.id);
     try {
-      setGeneratedCode(await onGenerateCode(points));
+      const updated = await onUpdatePermissions(target.id, {
+        ...target.mediaPermissions,
+        ...patch,
+      });
+      setAdminUsers(users => users.map(item => item.id === updated.id ? updated : item));
     } catch (error) {
       setActionError(errorMessage(error));
     } finally {
-      setIsGeneratingCode(false);
+      setUpdatingUserId('');
     }
   };
 
-  const handleResetPasswordSubmit = async (event: FormEvent<HTMLFormElement>) => {
+  const handleResetPassword = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (busy || isResettingPassword) return;
-
-    const input = {
+    setResettingPassword(true);
+    void runAction(() => onResetPassword({
       phone: resetPhone.trim(),
       realName: resetRealName.trim(),
       newPassword: resetNewPassword,
-    };
-    if (!input.phone || !input.realName || !input.newPassword) return;
-
-    setActionError('');
-    setResetPasswordError('');
-    setResetPasswordStatus('');
-    setIsResettingPassword(true);
-    try {
-      await onResetPassword(input);
-      setResetPhone('');
-      setResetRealName('');
-      setResetNewPassword('');
-      setResetPasswordStatus('密码已重置，该用户已从所有设备退出');
-    } catch (error) {
-      setResetPasswordError(errorMessage(error));
-    } finally {
-      setIsResettingPassword(false);
-    }
+    })).finally(() => setResettingPassword(false));
   };
 
-  const inputClass = 'h-11 w-full rounded-md border border-slate-300 bg-white px-3 text-base text-slate-900 outline-none transition-colors placeholder:text-slate-400 focus:border-sky-500 focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500';
-  const primaryButtonClass = 'inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-sky-700 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-300';
+  const handleBackdropMouseDown = (event: MouseEvent<HTMLDivElement>) => {
+    if (event.target === event.currentTarget && !controlsBusy) onClose();
+  };
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/50 p-4"
+      aria-labelledby={titleId}
+      aria-modal="true"
+      className="fixed inset-0 z-[1000] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm"
       onMouseDown={handleBackdropMouseDown}
+      role="dialog"
     >
-      <section
-        aria-labelledby={titleId}
-        aria-modal="true"
-        className="w-full max-w-lg max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-lg border border-slate-200 bg-white text-slate-900 shadow-2xl"
-        role="dialog"
-      >
-        <header className="flex min-h-16 items-center justify-between border-b border-slate-200 px-4 sm:px-5">
-          <div className="flex min-w-0 items-center gap-3">
-            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-sky-600 text-white shadow-sm">
-              <CircleUserRound aria-hidden="true" className="h-5 w-5" />
+      <div className="max-h-[88vh] w-full max-w-lg overflow-y-auto rounded-xl border border-white/70 bg-white shadow-2xl">
+        <header className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white/95 px-5 py-4 backdrop-blur">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-50 text-blue-600">
+              {user?.role === 'admin' ? <ShieldCheck className="h-5 w-5" /> : <CircleUserRound className="h-5 w-5" />}
             </span>
-            <h2 className="truncate text-base font-semibold" id={titleId}>{user ? '个人中心' : '账户'}</h2>
+            <div>
+              <h2 className="font-semibold text-slate-950" id={titleId}>{user ? '账号中心' : '登录人工智障'}</h2>
+              {user && <p className="text-xs text-slate-500">{user.realName} · {user.phone}</p>}
+            </div>
           </div>
-          <button
-            aria-label="关闭账户窗口"
-            className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500 disabled:cursor-not-allowed disabled:text-slate-300"
-            disabled={dialogLocked}
-            onClick={onClose}
-            type="button"
-          >
-            <X aria-hidden="true" className="h-5 w-5" />
+          <button aria-label="关闭" className="flex h-10 w-10 items-center justify-center rounded-full text-slate-500 hover:bg-slate-100" disabled={controlsBusy} onClick={onClose} type="button">
+            <X className="h-5 w-5" />
           </button>
         </header>
 
         {user ? (
-          <div>
-            <div aria-label="个人中心" className="grid grid-cols-2 border-b border-slate-200 bg-slate-50/80 p-1" role="tablist">
-              <button
-                aria-controls={profilePanelId}
-                aria-selected={accountSection === 'profile'}
-                className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-md px-3 text-sm font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-inset focus:ring-sky-500 ${accountSection === 'profile' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:bg-white/70 hover:text-slate-900'}`}
-                id={profileTabId}
-                onClick={() => setAccountSection('profile')}
-                role="tab"
-                type="button"
-              >
-                <CircleUserRound aria-hidden="true" className="h-4 w-4" />
-                个人信息
-              </button>
-              <button
-                aria-controls={historyPanelId}
-                aria-selected={accountSection === 'history'}
-                className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-md px-3 text-sm font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-inset focus:ring-sky-500 ${accountSection === 'history' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:bg-white/70 hover:text-slate-900'}`}
-                id={historyTabId}
-                onClick={() => setAccountSection('history')}
-                role="tab"
-                type="button"
-              >
-                <History aria-hidden="true" className="h-4 w-4" />
-                使用记录
-              </button>
-            </div>
-
-            {accountSection === 'profile' ? (
-              <div aria-labelledby={profileTabId} id={profilePanelId} role="tabpanel">
-            <div className="px-4 py-5 sm:px-5">
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex min-w-0 items-center gap-3">
-                  <span aria-hidden="true" className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-sky-100 text-base font-bold text-sky-700">
-                    {user.realName.trim().slice(0, 1) || '我'}
-                  </span>
-                  <span className="min-w-0">
-                  <p className="truncate text-base font-semibold text-slate-900">{user.realName}</p>
-                  <p className="mt-1 truncate text-sm text-slate-600">{user.phone}</p>
-                  </span>
+          <div className="space-y-5 p-5">
+            <section aria-label="功能权限">
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-slate-900">功能权限</h3>
+                {user.role === 'admin' && <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">管理员</span>}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className={`rounded-lg border px-3 py-3 ${user.mediaPermissions.imageGeneration ? 'border-emerald-200 bg-emerald-50/60' : 'border-slate-200 bg-slate-50'}`}>
+                  <Image className="mb-2 h-4 w-4 text-slate-600" />
+                  <p className="text-sm font-medium text-slate-900">图片生成</p>
+                  <p className="mt-1 text-xs text-slate-500">{user.mediaPermissions.imageGeneration ? '已授权' : '未授权'}</p>
                 </div>
-                {user.role === 'admin' && (
-                  <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-sky-50 px-2 py-1 text-xs font-semibold text-sky-700">
-                    <ShieldCheck aria-hidden="true" className="h-4 w-4" />
-                    管理员
-                  </span>
-                )}
-              </div>
-            </div>
-
-            <dl className="grid grid-cols-2 border-y border-slate-200 bg-slate-50/80">
-              <div aria-label="总积分" className="px-4 py-3 sm:px-5">
-                <dt className="text-xs text-slate-600">总积分</dt>
-                <dd className="mt-1 text-lg font-semibold tabular-nums text-slate-900">
-                  {user.points.toLocaleString('zh-CN')}
-                </dd>
-              </div>
-              <div aria-label="可用积分" className="border-l border-slate-200 px-4 py-3 sm:px-5">
-                <dt className="text-xs text-slate-600">可用积分</dt>
-                <dd className="mt-1 text-lg font-semibold tabular-nums text-slate-900">
-                  {user.availablePoints.toLocaleString('zh-CN')}
-                </dd>
-              </div>
-            </dl>
-
-            <div className="px-4 py-5 sm:px-5">
-              <div className="mb-3 flex items-center gap-2">
-                <TicketCheck aria-hidden="true" className="h-4 w-4 text-sky-600" />
-                <h3 className="text-sm font-semibold text-slate-900">兑换积分</h3>
-              </div>
-              <form className="space-y-3" onSubmit={handleRedeemSubmit}>
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700" htmlFor="account-redeem-code">
-                    兑换码
-                  </label>
-                  <input
-                    autoComplete="off"
-                    className={inputClass}
-                    disabled={controlsBusy}
-                    id="account-redeem-code"
-                    onChange={(event) => setRedeemValue(event.target.value)}
-                    placeholder="输入兑换码"
-                    ref={firstInputRef}
-                    required
-                    value={redeemValue}
-                  />
+                <div className={`rounded-lg border px-3 py-3 ${user.mediaPermissions.videoGeneration ? 'border-emerald-200 bg-emerald-50/60' : 'border-slate-200 bg-slate-50'}`}>
+                  <Video className="mb-2 h-4 w-4 text-slate-600" />
+                  <p className="text-sm font-medium text-slate-900">视频生成</p>
+                  <p className="mt-1 text-xs text-slate-500">{user.mediaPermissions.videoGeneration ? '已授权' : '未授权'}</p>
                 </div>
-                <button aria-label="兑换积分" className={primaryButtonClass} disabled={controlsBusy || !redeemValue.trim()} type="submit">
-                  <TicketCheck aria-hidden="true" className="h-4 w-4" />
-                  {controlsBusy ? '处理中' : '兑换积分'}
-                </button>
-              </form>
-            </div>
+              </div>
+            </section>
 
             {user.role === 'admin' && (
-              <div className="border-t border-slate-200 px-4 py-5 sm:px-5">
-                <div className="mb-3 flex items-center gap-2">
-                  <Sparkles aria-hidden="true" className="h-4 w-4 text-sky-600" />
-                  <h3 className="text-sm font-semibold text-slate-900">生成兑换码</h3>
-                </div>
-                <form className="space-y-3" onSubmit={handleGenerateSubmit}>
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium text-slate-700" htmlFor="account-code-points">
-                      兑换积分额度
-                    </label>
-                    <input
-                      className={inputClass}
-                      disabled={controlsBusy}
-                      id="account-code-points"
-                      inputMode="decimal"
-                      min="0.1"
-                      onChange={(event) => setPointsValue(event.target.value)}
-                      step="0.1"
-                      type="number"
-                      value={pointsValue}
-                    />
-                    {pointsError && <p className="mt-1.5 text-sm text-red-700" role="alert">{pointsError}</p>}
+              <>
+                <section className="border-t border-slate-200 pt-5">
+                  <h3 className="text-sm font-semibold text-slate-900">用户授权</h3>
+                  <div className="mt-3 divide-y divide-slate-100 rounded-lg border border-slate-200">
+                    {usersLoading && <p className="p-4 text-sm text-slate-500">正在加载账号...</p>}
+                    {!usersLoading && adminUsers.filter(item => item.role !== 'admin').map(target => (
+                      <div className="p-3" key={target.id}>
+                        <div className="mb-1 px-3">
+                          <p className="text-sm font-medium text-slate-900">{target.realName}</p>
+                          <p className="text-xs text-slate-500">{target.phone}</p>
+                        </div>
+                        <PermissionToggle checked={target.mediaPermissions.imageGeneration} disabled={controlsBusy} icon={Image} label="图片生成" onChange={checked => void updatePermissions(target, { imageGeneration: checked })} />
+                        <PermissionToggle checked={target.mediaPermissions.videoGeneration} disabled={controlsBusy} icon={Video} label="视频生成" onChange={checked => void updatePermissions(target, { videoGeneration: checked })} />
+                      </div>
+                    ))}
+                    {!usersLoading && adminUsers.filter(item => item.role !== 'admin').length === 0 && <p className="p-4 text-sm text-slate-500">暂无普通账号</p>}
                   </div>
-                  <button aria-label="生成兑换码" className={primaryButtonClass} disabled={controlsBusy} type="submit">
-                    <Sparkles aria-hidden="true" className="h-4 w-4" />
-                    {controlsBusy ? '生成中' : '生成兑换码'}
-                  </button>
-                </form>
+                </section>
 
-                {generatedCode && (
-                  <div aria-live="polite" className="mt-4 border-l-2 border-sky-500 bg-sky-50 px-3 py-2">
-                    <p className="text-xs font-medium text-sky-800">本次生成的兑换码</p>
-                    <output className="mt-1 block break-all font-mono text-base font-semibold text-slate-900">
-                      {generatedCode.code}
-                    </output>
-                    <p className="mt-1 text-xs text-slate-600">{generatedCode.points} 积分</p>
-                  </div>
-                )}
-
-                <div className="mt-5 border-t border-slate-200 pt-4">
-                  <button
-                    aria-controls={resetPasswordPanelId}
-                    aria-expanded={resetPasswordOpen}
-                    className="flex min-h-11 w-full items-center gap-2 text-left text-sm font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-sky-500 disabled:text-slate-400"
-                    disabled={controlsBusy}
-                    onClick={() => {
-                      setResetPasswordOpen(value => !value);
-                      setResetPasswordError('');
-                      setResetPasswordStatus('');
-                    }}
-                    type="button"
-                  >
-                    <KeyRound aria-hidden="true" className="h-4 w-4 text-sky-600" />
-                    <span className="flex-1">重置用户密码</span>
-                    <ChevronDown
-                      aria-hidden="true"
-                      className={`h-4 w-4 transition-transform ${resetPasswordOpen ? 'rotate-180' : ''}`}
-                    />
-                  </button>
-
-                  {resetPasswordOpen && (
-                    <form
-                      aria-describedby={resetPasswordWarningId}
-                      aria-label="重置用户密码"
-                      className="mt-3 space-y-3"
-                      id={resetPasswordPanelId}
-                      onSubmit={handleResetPasswordSubmit}
-                    >
-                      <p className="text-xs leading-5 text-amber-800" id={resetPasswordWarningId}>
-                        重置后，该用户会从所有设备退出登录
-                      </p>
-                      <div>
-                        <label className="mb-1 block text-sm font-medium text-slate-700" htmlFor="account-reset-phone">
-                          用户手机号
-                        </label>
-                        <input
-                          autoComplete="tel"
-                          className={inputClass}
-                          disabled={controlsBusy}
-                          id="account-reset-phone"
-                          inputMode="numeric"
-                          maxLength={11}
-                          onChange={(event) => setResetPhone(event.target.value)}
-                          pattern="[0-9]{11}"
-                          required
-                          type="tel"
-                          value={resetPhone}
-                        />
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-sm font-medium text-slate-700" htmlFor="account-reset-real-name">
-                          用户真实姓名
-                        </label>
-                        <input
-                          autoComplete="off"
-                          className={inputClass}
-                          disabled={controlsBusy}
-                          id="account-reset-real-name"
-                          onChange={(event) => setResetRealName(event.target.value)}
-                          required
-                          value={resetRealName}
-                        />
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-sm font-medium text-slate-700" htmlFor="account-reset-new-password">
-                          用户新密码
-                        </label>
-                        <input
-                          autoComplete="new-password"
-                          className={inputClass}
-                          disabled={controlsBusy}
-                          id="account-reset-new-password"
-                          minLength={8}
-                          onChange={(event) => setResetNewPassword(event.target.value)}
-                          required
-                          type="password"
-                          value={resetNewPassword}
-                        />
-                      </div>
-                      {resetPasswordError && (
-                        <p className="text-sm text-red-700" role="alert">{resetPasswordError}</p>
-                      )}
-                      {resetPasswordStatus && (
-                        <p className="text-sm text-emerald-700" role="status">{resetPasswordStatus}</p>
-                      )}
-                      <button
-                        className={primaryButtonClass}
-                        disabled={controlsBusy || !resetPhone.trim() || !resetRealName.trim() || !resetNewPassword}
-                        type="submit"
-                      >
-                        <KeyRound aria-hidden="true" className="h-4 w-4" />
-                        {isResettingPassword ? '正在重置' : '确认重置密码'}
-                      </button>
-                    </form>
-                  )}
-                </div>
-              </div>
-            )}
-              </div>
-            ) : (
-              <div
-                aria-labelledby={historyTabId}
-                className="px-4 py-4 sm:px-5"
-                id={historyPanelId}
-                role="tabpanel"
-              >
-                <AccountUsageHistory
-                  error={transactionsError}
-                  loading={transactionsLoading}
-                  onRetry={() => setTransactionsReloadKey(value => value + 1)}
-                  transactions={transactions}
-                />
-              </div>
+                <section className="border-t border-slate-200 pt-5">
+                  <h3 className="text-sm font-semibold text-slate-900">重置用户密码</h3>
+                  <form className="mt-3 space-y-3" onSubmit={handleResetPassword}>
+                    <input aria-label="用户手机号" className={inputClass} disabled={controlsBusy} onChange={event => setResetPhone(event.target.value)} placeholder="用户手机号" required value={resetPhone} />
+                    <input aria-label="用户真实姓名" className={inputClass} disabled={controlsBusy} onChange={event => setResetRealName(event.target.value)} placeholder="用户真实姓名" required value={resetRealName} />
+                    <input aria-label="用户新密码" className={inputClass} disabled={controlsBusy} minLength={8} onChange={event => setResetNewPassword(event.target.value)} placeholder="用户新密码" required type="password" value={resetNewPassword} />
+                    <button className={primaryButtonClass} disabled={controlsBusy} type="submit"><KeyRound className="h-4 w-4" />{resettingPassword ? '正在重置' : '确认重置密码'}</button>
+                  </form>
+                </section>
+              </>
             )}
 
-            {actionError && <p className="px-4 pb-4 text-sm text-red-700 sm:px-5" role="alert">{actionError}</p>}
-
-            <div className="border-t border-slate-200 px-4 py-4 sm:px-5">
-              <button
-                className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-md border border-red-200 bg-white px-4 py-2 text-sm font-semibold text-red-700 transition-colors hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:text-slate-400"
-                disabled={controlsBusy}
-                onClick={() => void runAction(onLogout)}
-                type="button"
-              >
-                <LogOut aria-hidden="true" className="h-4 w-4" />
-                退出登录
-              </button>
-            </div>
+            {actionError && <p className="text-sm text-red-700" role="alert">{actionError}</p>}
+            <button className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-red-200 px-4 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50" disabled={controlsBusy} onClick={() => void runAction(onLogout)} type="button">
+              <LogOut className="h-4 w-4" />退出登录
+            </button>
           </div>
         ) : (
           <div>
-            <div aria-label="账户操作" className="grid grid-cols-2 border-b border-slate-200" role="tablist">
-              {(['login', 'register'] as const).map((mode) => {
-                const selected = authMode === mode;
-                const label = mode === 'login' ? '登录' : '注册';
-                return (
-                  <button
-                    aria-controls={mode === 'login' ? loginPanelId : registerPanelId}
-                    aria-selected={selected}
-                    className={`min-h-11 border-b-2 px-4 text-sm font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-inset focus:ring-sky-500 ${selected ? 'border-sky-600 text-sky-700' : 'border-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`}
-                    disabled={controlsBusy}
-                    id={mode === 'login' ? loginTabId : registerTabId}
-                    key={mode}
-                    onClick={() => {
-                      setAuthMode(mode);
-                      setActionError('');
-                    }}
-                    role="tab"
-                    type="button"
-                  >
-                    {label}
-                  </button>
-                );
-              })}
+            <div className="grid grid-cols-2 border-b border-slate-200" role="tablist" aria-label="账号操作">
+              {(['login', 'register'] as const).map(mode => (
+                <button aria-selected={authMode === mode} className={`min-h-11 border-b-2 text-sm font-semibold ${authMode === mode ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:bg-slate-50'}`} disabled={controlsBusy} key={mode} onClick={() => { setAuthMode(mode); setActionError(''); }} role="tab" type="button">
+                  {mode === 'login' ? '登录' : '注册'}
+                </button>
+              ))}
             </div>
-
-            <form
-              aria-labelledby={authMode === 'login' ? loginTabId : registerTabId}
-              className="space-y-4 px-4 py-5 sm:px-5"
-              id={authMode === 'login' ? loginPanelId : registerPanelId}
-              onSubmit={handleAuthSubmit}
-              role="tabpanel"
-            >
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-700" htmlFor="account-phone">手机号</label>
-                <input
-                  autoComplete="tel"
-                  className={inputClass}
-                  disabled={controlsBusy}
-                  id="account-phone"
-                  inputMode={authMode === 'register' ? 'numeric' : 'tel'}
-                  maxLength={authMode === 'register' ? 11 : undefined}
-                  onChange={(event) => setPhone(event.target.value)}
-                  pattern={authMode === 'register' ? '[0-9]{11}' : undefined}
-                  placeholder="请输入手机号"
-                  ref={firstInputRef}
-                  required
-                  type="tel"
-                  value={phone}
-                />
-              </div>
-
-              {authMode === 'register' && (
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700" htmlFor="account-real-name">真实姓名</label>
-                  <input
-                    autoComplete="name"
-                    className={inputClass}
-                    disabled={controlsBusy}
-                    id="account-real-name"
-                    onChange={(event) => setRealName(event.target.value)}
-                    placeholder="请输入真实姓名"
-                    required
-                    value={realName}
-                  />
-                </div>
-              )}
-
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-700" htmlFor="account-password">密码</label>
-                <input
-                  autoComplete={authMode === 'login' ? 'current-password' : 'new-password'}
-                  className={inputClass}
-                  disabled={controlsBusy}
-                  id="account-password"
-                  minLength={8}
-                  onChange={(event) => setPassword(event.target.value)}
-                  placeholder="至少 8 位密码"
-                  required
-                  type="password"
-                  value={password}
-                />
-              </div>
-
-              {authMode === 'login' && (
-                <p className="text-xs text-slate-500">忘记密码请联系管理员</p>
-              )}
-
-              {resetPasswordStatus && (
-                <p className="text-sm text-emerald-700" role="status">{resetPasswordStatus}</p>
-              )}
-
+            <form className="space-y-4 p-5" onSubmit={handleAuthSubmit}>
+              <input aria-label="手机号" autoComplete="tel" className={inputClass} disabled={controlsBusy} maxLength={11} onChange={event => setPhone(event.target.value)} placeholder="手机号" ref={firstInputRef} required type="tel" value={phone} />
+              {authMode === 'register' && <input aria-label="真实姓名" autoComplete="name" className={inputClass} disabled={controlsBusy} onChange={event => setRealName(event.target.value)} placeholder="真实姓名" required value={realName} />}
+              <input aria-label="密码" autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} className={inputClass} disabled={controlsBusy} minLength={8} onChange={event => setPassword(event.target.value)} placeholder="密码" required type="password" value={password} />
               {actionError && <p className="text-sm text-red-700" role="alert">{actionError}</p>}
-
               <button className={primaryButtonClass} disabled={controlsBusy} type="submit">
-                {authMode === 'login'
-                  ? <LogIn aria-hidden="true" className="h-4 w-4" />
-                  : <UserPlus aria-hidden="true" className="h-4 w-4" />}
-                {controlsBusy
-                  ? '处理中'
-                  : authMode === 'login' ? '登录账户' : '创建账户'}
+                {authMode === 'login' ? <LogIn className="h-4 w-4" /> : <UserPlus className="h-4 w-4" />}
+                {busy ? '处理中' : authMode === 'login' ? '登录' : '注册账号'}
               </button>
             </form>
           </div>
         )}
-      </section>
+      </div>
     </div>
   );
 }

@@ -4,15 +4,6 @@ import { isUnauthorizedError } from '@/services/http';
 import type { Message, Session } from '@/types';
 import type { AiTaskOwner } from '@/services/api';
 
-const MEDIA_POINTS_CALIBRATION_DELAY_MS = 1_000;
-
-type MediaPointsCalibrationStatus = 'idle' | 'scheduled' | 'pending' | 'succeeded' | 'failed';
-
-interface MediaPointsCalibrationState {
-  immediate: MediaPointsCalibrationStatus;
-  delayed: MediaPointsCalibrationStatus;
-}
-
 interface UseAiChatSyncParams {
   aiOwner: AiTaskOwner;
   interactionEnabled?: boolean;
@@ -25,9 +16,6 @@ interface UseAiChatSyncParams {
   patchMessage: (sessionId: string, messageId: string, patch: Partial<Message>) => void;
   setStreaming: (streaming: boolean, controller?: AbortController | null) => void;
   setStreamingMessageId: (id: string | undefined) => void;
-  onMediaTaskSettled?: (
-    options?: { forceAfterCurrent?: boolean },
-  ) => Promise<boolean> | boolean | void;
 }
 
 export function useAiChatSync({
@@ -39,7 +27,6 @@ export function useAiChatSync({
   patchMessage,
   setStreaming,
   setStreamingMessageId,
-  onMediaTaskSettled,
 }: UseAiChatSyncParams) {
   const currentAiTaskIdRef = useRef<string | null>(null);
   const currentAiSessionIdRef = useRef<string | null>(null);
@@ -47,63 +34,9 @@ export function useAiChatSync({
   const serverTaskPollTimerRef = useRef<number | null>(null);
   const serverTaskPollStartedAtRef = useRef<number | null>(null);
   const settledTaskIdRef = useRef<string | null>(null);
-  const mediaPointsCalibrationStatesRef = useRef(new Map<string, MediaPointsCalibrationState>());
-  const delayedPointsRefreshTimersRef = useRef(new Map<string, number>());
   const pollGenerationRef = useRef(0);
   const activePollGenerationRef = useRef<number | null>(null);
   const inFlightGenerationRef = useRef<number | null>(null);
-
-  const runMediaPointsCalibration = useCallback((
-    taskId: string,
-    phase: 'immediate' | 'delayed',
-    state: MediaPointsCalibrationState,
-  ) => {
-    state[phase] = 'pending';
-    void (async () => {
-      try {
-        const refreshed = phase === 'delayed'
-          ? await onMediaTaskSettled?.({ forceAfterCurrent: true })
-          : await onMediaTaskSettled?.();
-        state[phase] = refreshed === false ? 'failed' : 'succeeded';
-      } catch (error) {
-        state[phase] = 'failed';
-        console.error(`Failed to calibrate account points for media task ${taskId}`, error);
-      }
-    })();
-  }, [onMediaTaskSettled]);
-
-  const calibrateMediaPoints = useCallback((
-    taskId: string,
-    taskType: 'chat' | 'image' | 'video' | null | undefined,
-  ) => {
-    if (
-      !onMediaTaskSettled
-      || (taskType !== 'image' && taskType !== 'video')
-    ) {
-      return;
-    }
-
-    let state = mediaPointsCalibrationStatesRef.current.get(taskId);
-    if (!state) {
-      state = { immediate: 'idle', delayed: 'idle' };
-      mediaPointsCalibrationStatesRef.current.set(taskId, state);
-    }
-    if (state.immediate === 'idle') {
-      runMediaPointsCalibration(taskId, 'immediate', state);
-    }
-    if (state.delayed !== 'idle') {
-      return;
-    }
-
-    state.delayed = 'scheduled';
-    const timerId = window.setTimeout(() => {
-      delayedPointsRefreshTimersRef.current.delete(taskId);
-      if (state?.delayed === 'scheduled') {
-        runMediaPointsCalibration(taskId, 'delayed', state);
-      }
-    }, MEDIA_POINTS_CALIBRATION_DELAY_MS);
-    delayedPointsRefreshTimersRef.current.set(taskId, timerId);
-  }, [onMediaTaskSettled, runMediaPointsCalibration]);
 
   const stopServerTaskPolling = useCallback(() => {
     pollGenerationRef.current += 1;
@@ -219,7 +152,6 @@ export function useAiChatSync({
       }
 
       if (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') {
-        calibrateMediaPoints(taskId, task.type);
         settledTaskIdRef.current = taskId;
         stopServerTaskPolling();
         setStreaming(false, null);
@@ -285,7 +217,6 @@ export function useAiChatSync({
           : undefined;
 
         if (taskSessionId && (!activeSession || activeSession.pendingTaskId !== taskId)) {
-          calibrateMediaPoints(taskId, currentAiTaskTypeRef.current);
           stopServerTaskPolling();
           setStreaming(false, null);
           setStreamingMessageId(undefined);
@@ -301,7 +232,7 @@ export function useAiChatSync({
         inFlightGenerationRef.current = null;
       }
     }
-  }, [aiOwner, calibrateMediaPoints, isActivePoll, patchMessage, setStreaming, setStreamingMessageId, stopServerTaskPolling, syncServerAiSessions]);
+  }, [aiOwner, isActivePoll, patchMessage, setStreaming, setStreamingMessageId, stopServerTaskPolling, syncServerAiSessions]);
 
   const startServerTaskPolling = useCallback((taskId: string, preferredSessionId?: string | null) => {
     const taskSessionId = preferredSessionId || currentAiSessionIdRef.current;
@@ -356,16 +287,13 @@ export function useAiChatSync({
       }
       void (async () => {
         const lastSessionId = currentAiSessionIdRef.current;
-        const taskType = currentAiTaskTypeRef.current;
-        let cancelledTask;
         try {
-          cancelledTask = await cancelServerAiTask(taskId, aiOwner);
+          await cancelServerAiTask(taskId, aiOwner);
         } catch (error) {
           console.error('Failed to cancel AI task', error);
           return;
         }
 
-        calibrateMediaPoints(taskId, cancelledTask?.type || taskType);
 
         if (currentAiTaskIdRef.current !== taskId) {
           return;
@@ -401,13 +329,10 @@ export function useAiChatSync({
         settledTaskIdRef.current = null;
       })();
     }
-  }, [aiOwner, calibrateMediaPoints, currentAiSession, currentAiSessionIdRef, setStreaming, setStreamingMessageId, stopServerTaskPolling, syncServerAiSessions]);
+  }, [aiOwner, currentAiSession, currentAiSessionIdRef, setStreaming, setStreamingMessageId, stopServerTaskPolling, syncServerAiSessions]);
 
   useEffect(() => () => {
     stopServerTaskPolling();
-    delayedPointsRefreshTimersRef.current.forEach(timerId => window.clearTimeout(timerId));
-    delayedPointsRefreshTimersRef.current.clear();
-    mediaPointsCalibrationStatesRef.current.clear();
   }, [stopServerTaskPolling]);
 
   useEffect(() => {
@@ -429,7 +354,6 @@ export function useAiChatSync({
           return;
         }
 
-        calibrateMediaPoints(currentAiTaskIdRef.current, currentAiTaskTypeRef.current);
         stopServerTaskPolling();
         currentAiTaskIdRef.current = null;
         currentAiSessionIdRef.current = null;
@@ -464,7 +388,7 @@ export function useAiChatSync({
     setStreaming(true, null);
     setStreamingMessageId(pendingMessage?.id);
     startServerTaskPolling(pendingTaskId, pendingSessionId);
-  }, [calibrateMediaPoints, currentAiSession, currentSessionId, interactionEnabled, setStreaming, setStreamingMessageId, startServerTaskPolling, stopServerTaskPolling]);
+  }, [currentAiSession, currentSessionId, interactionEnabled, setStreaming, setStreamingMessageId, startServerTaskPolling, stopServerTaskPolling]);
 
   return {
     currentAiTaskIdRef,

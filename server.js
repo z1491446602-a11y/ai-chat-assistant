@@ -26,6 +26,7 @@ import { loadEnvFile } from './server/env.js';
 import { createUpstreamFetch } from './server/httpClient.js';
 import { registerTerminalErrorHandler } from './server/httpErrors.js';
 import { registerAiRoutes } from './server/aiRoutes.js';
+import { registerShortVideoRoutes } from './server/shortVideoRoutes.js';
 import { createDataStore } from './server/storage.js';
 import {
   createCompressionFilter,
@@ -40,10 +41,11 @@ import {
   registerUploadEndpoint,
 } from './server/uploadFiles.js';
 import { parseUpstreamErrorMessage } from './server/upstreamErrors.js';
-import { createPointsService } from './server/pointsService.js';
 import { createVideoProvider } from './server/videoProvider.js';
+import { createGrokVideoProvider } from './server/grokVideoProvider.js';
 import { createVideoFileStore } from './server/videoFiles.js';
 import { createVideoJobStore } from './server/videoJobs.js';
+import { createSeedanceAssetProvider } from './server/seedanceAssets.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -51,6 +53,7 @@ loadEnvFile(path.join(__dirname, '.env'));
 
 const app = express();
 const {
+  HOST,
   PORT,
   DATA_DIR,
   DATA_FILE,
@@ -88,11 +91,23 @@ const {
   IMAGE_GROK_API_KEY,
   IMAGE_GROK_MODEL,
   VIDEO_DIR,
+  PUBLIC_BASE_URL,
   VIDEO_API_URL,
+  VIDEO_QUERY_URL,
+  VIDEO_ASSET_API_URL,
   VIDEO_API_KEY,
   VIDEO_API_MODEL,
   VIDEO_POLL_INTERVAL_MS,
+  VIDEO_ASSET_POLL_INTERVAL_MS,
+  VIDEO_ASSET_TIMEOUT_MS,
   VIDEO_TIMEOUT_MS,
+  GROK_VIDEO_API_URL,
+  GROK_VIDEO_API_KEY,
+  GROK_VIDEO_POLL_INTERVAL_MS,
+  GROK_VIDEO_TIMEOUT_MS,
+  SHORT_VIDEO_PARSER_URL,
+  SHORT_VIDEO_RATE_LIMIT_WINDOW_MS,
+  SHORT_VIDEO_RATE_LIMIT_MAX,
   VIDEO_MAX_BYTES,
   VIDEO_DOWNLOAD_HOSTS,
   FFPROBE_PATH,
@@ -110,7 +125,6 @@ const {
   ADMIN_PHONE,
   ADMIN_BOOTSTRAP_PASSWORD,
   ADMIN_REAL_NAME,
-  REDEEM_CODE_HMAC_SECRET,
   DEFAULT_ENABLE_WEB_SEARCH,
   BOCHA_WEB_SEARCH_API_URL,
   BOCHA_WEB_SEARCH_API_KEY,
@@ -161,10 +175,25 @@ const chatTaskScheduler = createChatTaskScheduler({
 const videoProvider = createVideoProvider({
   fetchImpl: upstreamFetch,
   apiUrl: VIDEO_API_URL,
+  queryUrl: VIDEO_QUERY_URL,
   apiKey: VIDEO_API_KEY,
   model: VIDEO_API_MODEL,
   pollIntervalMs: VIDEO_POLL_INTERVAL_MS,
   timeoutMs: VIDEO_TIMEOUT_MS,
+});
+const grokVideoProvider = createGrokVideoProvider({
+  fetchImpl: upstreamFetch,
+  baseUrl: GROK_VIDEO_API_URL,
+  apiKey: GROK_VIDEO_API_KEY,
+  pollIntervalMs: GROK_VIDEO_POLL_INTERVAL_MS,
+  timeoutMs: GROK_VIDEO_TIMEOUT_MS,
+});
+const seedanceAssetProvider = createSeedanceAssetProvider({
+  fetchImpl: upstreamFetch,
+  baseUrl: VIDEO_ASSET_API_URL,
+  apiKey: VIDEO_API_KEY,
+  pollIntervalMs: VIDEO_ASSET_POLL_INTERVAL_MS,
+  timeoutMs: VIDEO_ASSET_TIMEOUT_MS,
 });
 const videoFileStore = createVideoFileStore({
   fetchImpl: upstreamFetch,
@@ -267,11 +296,6 @@ const authService = createAuthService({
   saveData,
   sessionTtlMs: AUTH_SESSION_TTL_MS,
 });
-const pointsService = createPointsService({
-  data,
-  saveData,
-  redeemCodeHmacSecret: REDEEM_CODE_HMAC_SECRET,
-});
 const mediaRequestService = createMediaRequestService({ data, saveData });
 authService.prune();
 if (ADMIN_PHONE || ADMIN_BOOTSTRAP_PASSWORD) {
@@ -335,6 +359,8 @@ const {
   performStreamingChatCompletion,
   performImageGeneration,
   videoProvider,
+  grokVideoProvider,
+  seedanceAssetProvider,
   videoFileStore,
   videoJobStore,
   isKittyVoiceModel,
@@ -345,7 +371,6 @@ const {
   VOICE_REPLY_TOP_P,
   mediaTaskScheduler,
   chatTaskScheduler,
-  settleMediaTask: settlePersistedMediaTask,
   terminalMediaRequest: (requestKey, status) => mediaRequestService.terminal(requestKey, status),
   getMediaRequestKeyForTask: taskId => (
     Object.values(data.mediaRequests || {})
@@ -382,7 +407,6 @@ registerUploadEndpoint(app, {
 });
 registerAuthRoutes(app, {
   authService,
-  pointsService,
   cookieName: AUTH_COOKIE_NAME,
   cookieSecure: AUTH_COOKIE_SECURE,
   sessionTtlMs: AUTH_SESSION_TTL_MS,
@@ -391,6 +415,12 @@ registerAuthRoutes(app, {
   jsonParser: express.json({ limit: '16kb' }),
 });
 app.use(express.json({ limit: '50mb' }));
+registerShortVideoRoutes(app, {
+  fetchImpl: upstreamFetch,
+  parserBaseUrl: SHORT_VIDEO_PARSER_URL,
+  rateLimitWindowMs: SHORT_VIDEO_RATE_LIMIT_WINDOW_MS,
+  rateLimitMax: SHORT_VIDEO_RATE_LIMIT_MAX,
+});
 const distDir = path.join(__dirname, 'dist');
 registerStaticResourceRoutes(app, {
   distDir,
@@ -404,36 +434,18 @@ function normalizeUserId(userId) {
   return String(userId || '').trim();
 }
 
-function settlePersistedMediaTask(taskId, success, chargedUnits) {
-  if (!data.pointReservations?.[taskId]) {
-    return null;
-  }
-  return chargedUnits === undefined
-    ? pointsService.settle(taskId, success)
-    : pointsService.settlePartial(taskId, chargedUnits);
-}
-
 videoFileStore.ensureVideoDir();
 const resumedVideoJobs = resumeVideoJobs();
 const reconciledMediaRequests = reconcileMediaRequestOrphans({
   mediaRequestService,
   activeTaskIds: resumedVideoJobs.activeTaskIds || [],
-  pointReservations: data.pointReservations,
-  getAiSessions,
   findAiSession,
   patchAiMessage,
   clearAiSessionTask,
-  settleMediaTask: settlePersistedMediaTask,
   videoJobStore,
 });
-const reconciledPointReservations = pointsService.reconcileReservations(
-  resumedVideoJobs.activeTaskIds || [],
-);
 if (resumedVideoJobs.recoveredCount || resumedVideoJobs.unknownSubmissionCount) {
   console.log('Video jobs recovery:', resumedVideoJobs);
-}
-if (reconciledPointReservations.length) {
-  console.log(`Reconciled ${reconciledPointReservations.length} point reservations`);
 }
 if (
   reconciledMediaRequests.completedCount
@@ -506,7 +518,8 @@ registerAiRoutes(app, {
   cancelAiTask,
   chatTaskScheduler,
   resolveImageReferences,
-  pointsService,
+  saveUploadedFile,
+  PUBLIC_BASE_URL,
   mediaRequestService,
   videoJobStore,
   removeAiSession,
@@ -550,13 +563,15 @@ const server = createServer(app);
 server.keepAliveTimeout = 65000;
 server.headersTimeout = 66000;
 
-server.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, HOST, () => {
   const localIP = getLocalIPAddress();
   console.log('==============================================');
   console.log('AI Chat Server Started');
   console.log('==============================================');
-  console.log(`Local:    http://localhost:${PORT}`);
-  console.log(`Network:  http://${localIP}:${PORT}`);
+  console.log(`Local:    http://${HOST}:${PORT}`);
+  if (HOST !== '127.0.0.1' && HOST !== 'localhost') {
+    console.log(`Network:  http://${localIP}:${PORT}`);
+  }
   console.log(`Cpolar:   cpolar http ${PORT}`);
   console.log('==============================================');
 });

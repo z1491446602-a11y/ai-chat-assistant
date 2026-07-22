@@ -25,20 +25,17 @@ function createHarness(overrides = {}) {
 }
 
 describe('authentication storage', () => {
-  it('creates all authentication and points collections', () => {
+  it('creates only authentication and media collections', () => {
     expect(createEmptyData()).toEqual({
       aiSessions: {},
       videoJobs: {},
       mediaRequests: {},
       authUsers: {},
       authSessions: {},
-      redeemCodes: {},
-      pointReservations: {},
-      pointTransactions: [],
     });
   });
 
-  it('removes legacy social data without discarding AI, authentication, or unknown fields', () => {
+  it('removes legacy social and points data without discarding AI, authentication, or unknown fields', () => {
     const legacy = {
       aiSessions: { owner: [{ id: 'session-1' }] },
       videoJobs: { job: { status: 'queued' } },
@@ -63,9 +60,6 @@ describe('authentication storage', () => {
       mediaRequests: {},
       authUsers: { current: { id: 'current', phone: '13900139000' } },
       authSessions: { session: { userId: 'current' } },
-      redeemCodes: { code: { hash: 'hash' } },
-      pointReservations: { reservation: { userId: 'current' } },
-      pointTransactions: [],
       customSetting: true,
     });
     expect(JSON.stringify(normalized)).not.toContain('plaintext-secret');
@@ -111,6 +105,10 @@ describe('createAuthService', () => {
       phone: '13800138000',
       realName: '张 三·Alice',
       role: 'user',
+      mediaPermissions: {
+        imageGeneration: false,
+        videoGeneration: false,
+      },
       createdAt: 1_700_000_000_000,
     });
     expect(user).not.toHaveProperty('password');
@@ -122,6 +120,53 @@ describe('createAuthService', () => {
     expect(storedUser.passwordSalt).toMatch(/^[a-f0-9]+$/u);
     expect(JSON.stringify(data)).not.toContain('password1');
     expect(saveData).toHaveBeenCalledWith(data);
+  });
+
+  it('lets an administrator grant image and video permissions independently', async () => {
+    const { auth, data, saveData } = createHarness();
+    const user = await auth.register({
+      phone: '13800138000',
+      password: 'password1',
+      realName: '张三',
+    });
+    saveData.mockClear();
+
+    const imageOnly = auth.updateMediaPermissions(user.id, {
+      imageGeneration: true,
+      videoGeneration: false,
+    });
+
+    expect(imageOnly.mediaPermissions).toEqual({
+      imageGeneration: true,
+      videoGeneration: false,
+    });
+    expect(data.authUsers[user.id].mediaPermissions).toEqual(imageOnly.mediaPermissions);
+    expect(auth.listUsers()).toContainEqual(imageOnly);
+    expect(saveData).toHaveBeenCalledOnce();
+
+    const both = auth.updateMediaPermissions(user.id, {
+      imageGeneration: true,
+      videoGeneration: true,
+    });
+    expect(both.mediaPermissions).toEqual({
+      imageGeneration: true,
+      videoGeneration: true,
+    });
+  });
+
+  it('always exposes both media permissions for administrators', async () => {
+    const { auth } = createHarness();
+    const admin = await auth.ensureAdmin({
+      phone: '13800138000',
+      password: 'adminpass1',
+      realName: '管理员',
+    });
+
+    expect(admin.mediaPermissions).toEqual({
+      imageGeneration: true,
+      videoGeneration: true,
+    });
+    expect(auth.updateMediaPermissions(admin.id, {})).toEqual(admin);
   });
 
   it.each([

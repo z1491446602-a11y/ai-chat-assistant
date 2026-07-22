@@ -5,8 +5,10 @@ export interface AuthUser {
   phone: string;
   realName: string;
   role: 'user' | 'admin';
-  points: number;
-  availablePoints: number;
+  mediaPermissions: {
+    imageGeneration: boolean;
+    videoGeneration: boolean;
+  };
 }
 
 export interface LoginInput {
@@ -34,32 +36,7 @@ export interface AdminResetPasswordResult {
   };
 }
 
-export interface GeneratedRedeemCode {
-  code: string;
-  points: number;
-}
-
-export interface RedeemCodeRecord {
-  id: string;
-  maskedCode: string;
-  points: number;
-  createdAt: string | number;
-  used: boolean;
-  usedBy: string | null;
-  usedAt: string | number | null;
-}
-
-export interface PointTransactionRecord {
-  id: string;
-  type: 'credit' | 'debit' | 'release';
-  points: number;
-  costPoints: number;
-  taskType: 'image' | 'video' | null;
-  reason: string | null;
-  balance: number;
-  availablePoints: number;
-  createdAt: string | number;
-}
+export type AdminUser = AuthUser;
 
 const JSON_ACCEPT_HEADER = { Accept: 'application/json' } as const;
 const JSON_REQUEST_HEADERS = {
@@ -141,20 +118,20 @@ export async function logout(): Promise<void> {
   await postJson('/api/auth/logout');
 }
 
-export async function redeemCode(code: string): Promise<AuthUser> {
-  const result = await postJson<{ user: AuthUser }>('/api/points/redeem', { code });
-  return result.user;
+export async function fetchAdminUsers(): Promise<AdminUser[]> {
+  const result = await requestJson<{ users: AdminUser[] }>('/api/admin/users');
+  return result.users;
 }
 
-export async function fetchPointTransactions(): Promise<PointTransactionRecord[]> {
-  const result = await requestJson<{ transactions: PointTransactionRecord[] }>(
-    '/api/points/transactions',
+export async function updateMediaPermissions(
+  userId: string,
+  mediaPermissions: AuthUser['mediaPermissions'],
+): Promise<AdminUser> {
+  const result = await postJson<{ user: AdminUser }>(
+    `/api/admin/users/${encodeURIComponent(userId)}/media-permissions`,
+    mediaPermissions,
   );
-  return result.transactions;
-}
-
-export function generateRedeemCode(points: number): Promise<GeneratedRedeemCode> {
-  return postJson<GeneratedRedeemCode>('/api/admin/redeem-codes', { points });
+  return result.user;
 }
 
 export function adminResetPassword(
@@ -167,11 +144,6 @@ export function adminResetPassword(
     realName,
     newPassword,
   });
-}
-
-export async function fetchRedeemCodes(): Promise<RedeemCodeRecord[]> {
-  const result = await requestJson<{ codes: RedeemCodeRecord[] }>('/api/admin/redeem-codes');
-  return result.codes;
 }
 
 export type AuthStatus = 'loading' | 'authenticated' | 'guest' | 'error';

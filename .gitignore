@@ -39,7 +39,8 @@ __pycache__/
 
 # Workspace archives and temporary files
 workspace-artifacts/
-/chat-app-release.tgz
+*.tgz
+docs/superpowers/
 
 # OS files
 .DS_Store

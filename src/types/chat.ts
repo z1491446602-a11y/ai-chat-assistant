@@ -6,10 +6,18 @@ export type VideoGenerationStage = 'submitting' | 'queued' | 'processing' | 'dow
 
 export type ImageGenerationStage = 'submitting' | 'generating' | 'receiving' | 'persisting';
 
+export type VideoAspectRatio = '21:9' | '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '3:2' | '2:3' | 'adaptive';
+export type VideoInputMode = 'references' | 'frames';
+export type VideoGenerationModel = 'seedance_1_5_pro_720p' | 'seedance_1_5_pro_480p' | 'grok-imagine-video-1.5';
+
 export interface VideoGenerationInputs {
+  videoModel?: VideoGenerationModel;
   image: string;
   lastFrame: string;
   referenceImages: string[];
+  inputMode?: VideoInputMode;
+  durationSeconds?: number;
+  aspectRatio?: VideoAspectRatio;
 }
 
 export interface MessageFile {

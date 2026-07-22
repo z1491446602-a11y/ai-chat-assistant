@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 
 const PERSISTED_FIELDS = [
   'id', 'ownerId', 'ownerType', 'sessionId', 'messageId', 'userMessageId', 'prompt',
-  'upstreamTaskId', 'status', 'stage', 'error', 'createdAt', 'updatedAt',
+  'videoModel', 'upstreamTaskId', 'videoAssetIds', 'status', 'stage', 'error', 'createdAt', 'updatedAt',
 ];
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'canceled']);
 export const MAX_VIDEO_JOBS = 1_000;
@@ -60,7 +60,9 @@ export function createVideoJobStore({ data: sharedData, loadData, saveData, now 
       messageId: String(input.messageId || ''),
       userMessageId: String(input.userMessageId || ''),
       prompt: String(input.prompt || '').slice(0, MAX_VIDEO_PROMPT_LENGTH),
+      videoModel: input.videoModel ? String(input.videoModel) : undefined,
       upstreamTaskId: String(input.upstreamTaskId || ''),
+      videoAssetIds: Array.isArray(input.videoAssetIds) ? input.videoAssetIds.map(String) : [],
       status: String(input.status || 'pending'),
       stage: String(input.stage || input.videoStage || 'created'),
       error: String(input.error || ''),
@@ -127,12 +129,19 @@ export function createVideoJobStore({ data: sharedData, loadData, saveData, now 
   function getRecoveryPlan() {
     const recoverable = [];
     const unknownSubmission = [];
+    const staleAssets = [];
     for (const job of Object.values(readData().videoJobs)) {
-      if (!job || TERMINAL_STATUSES.has(String(job.status || '').toLowerCase())) continue;
+      if (!job) continue;
+      if (TERMINAL_STATUSES.has(String(job.status || '').toLowerCase())) {
+        if (Array.isArray(job.videoAssetIds) && job.videoAssetIds.some(Boolean)) {
+          staleAssets.push(clone(pickPersistedFields(job)));
+        }
+        continue;
+      }
       const target = String(job.upstreamTaskId || '').trim() ? recoverable : unknownSubmission;
       target.push(clone(pickPersistedFields(job)));
     }
-    return { recoverable, unknownSubmission };
+    return { recoverable, unknownSubmission, staleAssets };
   }
 
   return {

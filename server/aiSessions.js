@@ -1,7 +1,7 @@
 export const MAX_AI_SESSIONS_PER_OWNER = 100;
 export const MAX_AI_MESSAGES_PER_SESSION = 200;
 export const MAX_AI_MESSAGE_CONTENT_LENGTH = 100_000;
-export const MAX_AI_IMAGES_PER_MESSAGE = 8;
+export const MAX_AI_IMAGES_PER_MESSAGE = 9;
 export const MAX_AI_FILES_PER_MESSAGE = 10;
 export const MAX_AI_MEDIA_URL_LENGTH = 2_048;
 export const MAX_AI_FILE_NAME_LENGTH = 255;
