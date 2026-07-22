@@ -206,7 +206,8 @@ ln -s "$SHARED/data.json" "$RELEASE_DIR/data.json"
 
 id chatapp >/dev/null 2>&1 || useradd --system --home-dir "$SHARED" --shell /usr/sbin/nologin chatapp
 chown root:chatapp "$SHARED"
-chmod 750 "$SHARED"
+# The app atomically replaces data.json via a sibling temporary file.
+chmod 770 "$SHARED"
 chown chatapp:chatapp "$SHARED/.env"
 chmod 600 "$SHARED/.env"
 chown -R chatapp:chatapp "$SHARED/storage"
