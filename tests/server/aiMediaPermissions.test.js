@@ -42,6 +42,8 @@ async function startApp() {
       ownerType: 'guest',
     };
   });
+  const registerAiTask = vi.fn();
+  const upsertAiSession = vi.fn((_ownerRef, session) => session);
   registerAiRoutes(app, {
     resolveAiOwnerFromInput,
     resolveImageProvider: vi.fn(() => ({ id: 'gpt', apiKey: 'configured' })),
@@ -49,12 +51,12 @@ async function startApp() {
     getAiSessions: vi.fn(() => []),
     findAiSession: vi.fn(() => null),
     createAiSession: vi.fn(),
-    upsertAiSession: vi.fn(),
+    upsertAiSession,
     appendAiMessage: vi.fn(),
     removeAiSession: vi.fn(),
     removeAllAiSessions: vi.fn(),
     getAiTask: vi.fn(),
-    registerAiTask: vi.fn(),
+    registerAiTask,
     serializeAiTask: value => value,
     runAiTask: vi.fn(),
     cancelAiTask: vi.fn(),
@@ -84,7 +86,7 @@ async function startApp() {
   openServers.add(server);
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
-  return { baseUrl: `http://127.0.0.1:${address.port}`, resolveAiOwnerFromInput };
+  return { baseUrl: `http://127.0.0.1:${address.port}`, resolveAiOwnerFromInput, registerAiTask };
 }
 
 function post(baseUrl, path, headers = {}, body = { prompt: '' }) {
@@ -109,5 +111,20 @@ describe('AI media availability', () => {
   it('falls back to an IP-scoped guest owner when no owner is provided', async () => {
     const { baseUrl } = await startApp();
     expect((await post(baseUrl, '/api/ai-task/image')).status).toBe(400);
+  });
+
+  it.each([
+    ['/api/ai-task/image', 'image'],
+    ['/api/ai-task/video', 'video'],
+  ])('keeps guest ownership on a created %s task', async (path, type) => {
+    const { baseUrl, registerAiTask } = await startApp();
+    const response = await post(baseUrl, path, {}, { prompt: 'a simple test prompt', guestId: 'guest-1' });
+
+    expect(response.status).toBe(200);
+    expect(registerAiTask).toHaveBeenCalledWith(expect.objectContaining({
+      ownerId: 'guest-1',
+      ownerType: 'guest',
+      type,
+    }));
   });
 });
