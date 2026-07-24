@@ -56,28 +56,19 @@ function SidebarToggleButton({ open, onClick }: { open: boolean; onClick: () => 
   return (
     <button
       onClick={onClick}
-      style={{ left: open ? openLeft : '16px' }}
-      className={`tech-hover-float fixed top-4 z-[70] flex h-11 min-w-[54px] items-center justify-center rounded-full border px-3 shadow-sm backdrop-blur transition-all duration-300 ${
+      style={{ left: open ? openLeft : '12px' }}
+      className={`tech-hover-float fixed top-2.5 z-[70] flex h-8 w-8 items-center justify-center rounded-xl border bg-white/80 shadow-sm backdrop-blur-md transition-all duration-200 hover:bg-white active:scale-95 ${
         open
-          ? 'border-sky-200/90 bg-[linear-gradient(180deg,rgba(248,252,255,0.96)_0%,rgba(233,244,255,0.98)_100%)] text-sky-700 shadow-[0_14px_32px_rgba(37,99,235,0.14)]'
-          : 'border-sky-100/90 bg-white/90 text-slate-700 shadow-[0_12px_28px_rgba(15,23,42,0.08)] hover:bg-white'
+          ? 'border-sky-200 text-sky-600 shadow-md shadow-sky-100/50'
+          : 'border-slate-200 text-slate-500 hover:text-slate-800'
       }`}
       aria-label={open ? '关闭侧边栏' : '打开侧边栏'}
     >
-      <div className="relative h-5 w-6">
-        <span
-          className={`absolute left-0 top-0.5 h-[3px] rounded-full transition-all ${
-            open ? 'w-4 translate-x-1 rotate-45 bg-sky-600' : 'w-4 bg-slate-700'
-          }`}
-        />
-        <span
-          className={`absolute left-0 top-[9px] h-[3px] rounded-full transition-all ${
-            open ? 'w-4 -translate-x-0.5 -rotate-45 bg-sky-600' : 'w-6 bg-slate-400'
-          }`}
-        />
-        {!open && <span className="absolute left-0 top-[17px] h-[3px] w-4 rounded-full bg-slate-700" />}
-      </div>
-    </button>
+      {open ? (
+        <svg className='h-3.5 w-3.5' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2.5' strokeLinecap='round' strokeLinejoin='round'><line x1='18' y1='6' x2='6' y2='18'></line><line x1='6' y1='6' x2='18' y2='18'></line></svg>
+      ) : (
+        <svg className='h-3.5 w-3.5' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2.5' strokeLinecap='round' strokeLinejoin='round'><line x1='3' y1='12' x2='21' y2='12'></line><line x1='3' y1='6' x2='21' y2='6'></line><line x1='3' y1='18' x2='21' y2='18'></line></svg>
+      )}</button>
   );
 }
 
